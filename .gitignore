@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build output — REQ-STACK-02 is verified on the assumption this is not in git
+dist/
+build/
+
+# Environment — DATABASE_URL lives here, and points at the deployed database.
+# .env.example is committed on purpose; it lists the variables without their values.
+.env
+.env.*
+!.env.example
+
+# Tests and logs
+coverage/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editors and OS
+.DS_Store
+.idea/
+*.swp
+
+# NOTE: prisma/migrations/ is NOT ignored. The migration files are generated, but they are
+# the schema's source of truth: the entrypoint runs `prisma migrate deploy` against them, so
+# excluding them leaves the deployed database without a schema (REQ-INIT-01) and removes the
+# directory a reviewer opens first under "database initialization".
