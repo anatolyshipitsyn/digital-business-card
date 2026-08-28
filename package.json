@@ -1,0 +1,49 @@
+{
+  "name": "digital-business-card",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A backend digital business card: a GraphQL API over NestJS and Prisma",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build": "nest build",
+    "start:dev": "rm -rf dist; nest build --watch & builder=$!; while kill -0 $builder 2>/dev/null; do until [ -f dist/main.js ]; do kill -0 $builder 2>/dev/null || break 2; sleep 0.2; done; node --watch --watch-path=./dist dist/main.js; sleep 0.5; done; exit 1",
+    "lint": "eslint . --max-warnings 0",
+    "format": "prettier --write \"src/**/*.ts\""
+  },
+  "dependencies": {
+    "@nestjs/common": "11.2.3",
+    "@nestjs/core": "11.2.3",
+    "@nestjs/platform-express": "11.2.3",
+    "@nestjs/terminus": "11.1.1",
+    "@prisma/client": "7.10.0",
+    "prisma": "7.10.0",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@nestjs/cli": "11.0.24",
+    "@nestjs/schematics": "11.1.0",
+    "@types/node": "22.20.1",
+    "eslint": "10.9.1",
+    "eslint-config-prettier": "10.1.8",
+    "prettier": "3.9.6",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.68.0"
+  },
+  "//overrides": [
+    "deepmerge-ts is forced to 8.0.2 for GHSA-ggr8-5vv4-36mx (high, stack exhaustion on recursive",
+    "object graphs, affecting <8.0.0). @prisma/config@7.10.0 depends on exactly 7.1.5, and `prisma`",
+    "is a production dependency here for `migrate deploy`, so the advisory would otherwise ship in",
+    "the runtime image: `npm audit --omit=dev` reports three high findings without this entry and",
+    "zero with it. npm's own remedy downgrades prisma to 6.x, which Prisma 7 decisions are written",
+    "against. Load-bearing, not a leftover — drop it once @prisma/config depends on 8.x itself.",
+    "Full reasoning: \"On the one overrides entry\" in docs/requirements/REQUIREMENTS.md."
+  ],
+  "overrides": {
+    "deepmerge-ts": "8.0.2"
+  }
+}

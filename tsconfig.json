@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "declaration": true,
+    "sourceMap": true,
+    // No `incremental`: `deleteOutDir` in nest-cli.json empties dist/, while a .tsbuildinfo
+    // left from an earlier run tells tsc everything is current — `nest build` then exits 0
+    // having emitted nothing at all. Watch mode holds its state in memory and image builds
+    // always start cold, so the on-disk cache bought nothing here to begin with.
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "strict": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

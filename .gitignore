@@ -4,6 +4,7 @@ node_modules/
 # Build output — REQ-STACK-02 is verified on the assumption this is not in git
 dist/
 build/
+*.tsbuildinfo
 
 # Environment — DATABASE_URL lives here, and points at the deployed database.
 # .env.example is committed on purpose; it lists the variables without their values.
