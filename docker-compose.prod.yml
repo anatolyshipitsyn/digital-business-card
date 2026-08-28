@@ -1,0 +1,59 @@
+# ------------------------------------------------------------------------------------------------
+# Production overrides. Layered on top of docker-compose.yml, never used on its own:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# The base file is the development environment: watch mode over a bind-mounted working tree. This
+# file turns it into the deployment — the built runtime image, no source mount, the loopback
+# binding — and inverts the variables: `:?` makes Compose refuse to start rather than quietly bring
+# production up on the local development password. Nothing is defaulted here, and no value is
+# written into the file.
+#
+# The values come from the repository's GitHub environment — Settings → Environments → Staging —
+# and reach the deploy as ordinary process environment variables. What that environment has to
+# hold for the overrides below:
+#
+#   POSTGRES_USER      variable
+#   POSTGRES_PASSWORD  secret
+#   POSTGRES_DB        variable
+#
+# Generate POSTGRES_PASSWORD from unreserved characters only — letters and digits. The base file
+# builds DATABASE_URL by substituting these three into a URL, and Compose cannot percent-encode:
+# a password holding `@`, `:`, `/`, `#` or `?` produces a string Prisma parses as a different host
+# and database, and it fails only here, because local development never leaves `card`. Where the
+# password cannot be constrained, set DATABASE_URL explicitly and the derivation is bypassed.
+#
+# It currently holds none of them, so a deploy stops at the first `:?` until they are created.
+#
+# DATABASE_URL is deliberately not among them. The database is a service in this same file rather
+# than a managed instance, so the connection string the base file derives from the three variables
+# above is already the right one; making it a fourth secret would only add a way for the two to
+# disagree. Override it only if the database ever moves outside compose.
+#
+# PORT keeps its default unless the host wants another one.
+# ------------------------------------------------------------------------------------------------
+
+x-postgres-credentials: &postgres-credentials
+  POSTGRES_USER: ${POSTGRES_USER:?required in production, set it in the GitHub environment}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required in production, set it in the GitHub environment}
+  POSTGRES_DB: ${POSTGRES_DB:?required in production, set it in the GitHub environment}
+
+services:
+  db:
+    environment: *postgres-credentials
+
+  app:
+    build:
+      target: runtime
+    environment:
+      NODE_ENV: production
+    # Cleared rather than merged: Compose would otherwise keep the base file's bind mount over the
+    # image's own /app. The watch command needs no reset — it is the dev stage's CMD, and this
+    # service builds the runtime stage instead.
+    volumes: !reset []
+    # `!override` for the same reason: Compose appends port mappings across files, so without it
+    # the base file's 0.0.0.0 binding would survive alongside this one and the application would
+    # still answer from outside the host. The VPS terminates TLS in a reverse proxy, so the only
+    # thing that may reach the container directly is that proxy, over loopback.
+    ports: !override
+      - '127.0.0.1:${PORT:-3000}:${PORT:-3000}'

@@ -1,0 +1,15 @@
+# The build context. Everything the image needs is copied explicitly in the Dockerfile; the rest
+# only slows the build down or would bake local state into the image.
+.git
+.github
+node_modules
+dist
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+docs
+*.md
+docker-compose*.yml
+Dockerfile
+.dockerignore
