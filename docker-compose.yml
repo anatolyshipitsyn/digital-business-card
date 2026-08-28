@@ -1,0 +1,82 @@
+# Local development environment. docker-compose.prod.yml overlays the runtime image and loopback
+# binding for deployment. All local variables have defaults, so .env is optional.
+
+# PostgreSQL initialisation values, used only when the volume is empty.
+x-postgres-credentials: &postgres-credentials
+  POSTGRES_USER: ${POSTGRES_USER:-card}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-card}
+  POSTGRES_DB: ${POSTGRES_DB:-card}
+
+# DATABASE_URL follows the same credentials by default; an explicit value still wins.
+x-app-environment: &app-environment
+  DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-card}:${POSTGRES_PASSWORD:-card}@db:5432/${POSTGRES_DB:-card}?schema=public}
+  PORT: ${PORT:-3000}
+  NODE_ENV: ${NODE_ENV:-development}
+
+services:
+  db:
+    # Pinned to a minor for the same reason the Dockerfile pins node:22.22-slim: REQ-EVAL-07 is a
+    # claim about a from-scratch start, and a tag that moves under it makes that claim quietly false.
+    image: postgres:18.6-alpine
+    restart: unless-stopped
+    environment: *postgres-credentials
+    volumes:
+      # postgres:18 keeps its cluster under /var/lib/postgresql/<major>/docker and declares the
+      # volume one level up, at /var/lib/postgresql. Mounting the pre-18 path instead leaves the
+      # data in the container's writable layer, where a `docker compose down` drops it.
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      # Probed over TCP, not the Unix socket: during initdb the image runs a temporary server with
+      # listen_addresses='', which answers on the socket and would report ready before the real
+      # one exists. start_period keeps those early refusals from consuming retries.
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    # The app and Prisma CLI reach PostgreSQL over the Compose network.
+
+  app:
+    build:
+      context: .
+      target: dev
+    restart: unless-stopped
+    environment: *app-environment
+    volumes:
+      - .:/app
+      # Keep Linux dependencies separate from the host checkout. The catch: a named volume is
+      # populated from the image once, at creation, and never again — so `up --build` after a change
+      # to package.json or package-lock.json rebuilds the image and still runs the old tree. Recreate
+      # it deliberately when the manifests move:
+      #   docker compose down && docker volume rm digital-business-card_app-node-modules
+      # This is a development-only trap: the runtime stage installs at build time with no volume
+      # over it, so the deployed image always matches the lockfile.
+      - app-node-modules:/app/node_modules
+    ports:
+      # The production overlay replaces this with a loopback-only binding.
+      - '0.0.0.0:${PORT:-3000}:${PORT:-3000}'
+    depends_on:
+      # Wait for initdb and the real PostgreSQL server before starting the app.
+      db:
+        condition: service_healthy
+    healthcheck:
+      # Use Node's built-in fetch so the image needs no curl or wget.
+      test:
+        - CMD
+        - node
+        - -e
+        - 'fetch("http://127.0.0.1:${PORT:-3000}/health").then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))'
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    # Schema work runs through the app image — no CLI container of its own. The bind mount above
+    # already carries the working tree, so a migration written inside the container lands in the
+    # repository and survives `--rm`:
+    #   docker compose run --rm --entrypoint ./node_modules/.bin/prisma app \
+    #     migrate dev --create-only
+    # At runtime the entrypoint runs `prisma migrate deploy` itself, from M3 on.
+
+volumes:
+  db-data:
+  app-node-modules:
