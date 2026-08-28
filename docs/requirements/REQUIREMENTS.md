@@ -262,13 +262,21 @@ initialization the official image starts a temporary server with `listen_address
 on the socket and would report ready before the real one exists; a TCP probe is refused for exactly
 as long as it should be. A `start_period` keeps those early refusals from consuming `retries`.
 
-`app` is probed by posting `{__typename}` to the GraphQL endpoint with `node -e` and `fetch`:
-`node:*-slim` carries neither `curl` nor `wget`, and pulling a package into the runtime image to run
-a health check would be a poor trade. The probe deliberately does not touch the database. A liveness
-check that queries Postgres flaps on any transient blip and kills a container that is in fact
-healthy, and by the time the application runs at all the migrations have already proven the database
-reachable. `@nestjs/terminus` is not added, for the reason it is not needed: one line of compose does
-this, while a module plus a dependency is the scope REQ-EVAL-01 counts against.
+`app` is probed by fetching `/health` with `node -e` and `fetch`: `node:*-slim` carries neither
+`curl` nor `wget`, and pulling a package into the image to run a health check would be a poor
+trade. What it asks for is the application's own `/health` route — a `HealthModule` holding one
+controller — and it reads the status, so an application answering 500 everywhere does not pass.
+
+The probe deliberately does not touch the database. A liveness check that queries Postgres flaps on
+any transient blip and kills a container that is in fact healthy, and by the time the application
+runs at all the migrations have already proven the database reachable.
+
+The route is `@nestjs/terminus`, with an empty indicator list: reaching the handler already proves
+the process is up and the HTTP stack answers, and there is nothing else to assert yet. From M2 it
+gains a `PrismaHealthIndicator`, which Terminus ships — so the readiness check that M5 wants costs
+no further dependency and no change to the probe. Terminus is what pins the framework to NestJS 11:
+11.1.1 declares `@nestjs/common ^10 || ^11`, and forcing it onto 12 with `--legacy-peer-deps` would
+leave a reviewer's `npm ci` failing on ERESOLVE unless the flag were baked into `.npmrc`.
 
 None of this weakens REQ-INIT-01's negative case. Deployment is not compose — there the database is
 external and no orchestrator gates startup, so an unreachable one must still make the container exit
@@ -312,13 +320,55 @@ Running migrations at startup has a packaging cost, and it is paid deliberately.
 a command of the `prisma` CLI package, which conventionally sits in `devDependencies` — a runtime
 stage built with `npm ci --omit=dev` therefore fails with `prisma: not found`, and fails only once
 deployed, because the development image had it. `prisma` is a production dependency here for that
-reason; it is not a mistake to be tidied away. The runtime image also keeps `prisma/schema.prisma`
-(`migrate deploy` reads the datasource from it), `prisma/migrations/`, and the client generated at
-build time with its query engine. The base image is Debian-slim rather than Alpine: Prisma needs a
-musl-specific binary target on Alpine, and the mismatch surfaces as a runtime error about a missing
-engine — a few megabytes of image is cheaper than that class of bug. Nothing else is added, and in
-particular no `ts-node`, `tsx` or `prisma db seed`: with the seed as a migration there is no seed
-runner in the image at all.
+reason; it is not a mistake to be tidied away. The runtime image also keeps `prisma/schema.prisma`,
+`prisma/migrations/` and the client generated at build time — and, on Prisma 7, `prisma.config.ts`
+with them. The datasource URL is no longer allowed inside `schema.prisma` there: the schema declares
+the provider and nothing else, and the connection string is read from the config file, so an image
+that omits it has a CLI that cannot find the database.
+
+The base image is Debian-slim rather than Alpine, and the reason is glibc rather than Prisma. On
+Prisma 7 the musl target resolves on its own — `node:22-alpine` with `apk add openssl` was measured
+building and running this image, picking `schema-engine-linux-musl-arm64-openssl-3.0.x` without a
+warning, and coming out 83 MB smaller. What those 83 MB buy is the C library the application is
+developed and tested against, and the absence of musl's differences in DNS resolution and stack
+sizing, which surface under load rather than at build time. The choice is cheap to revisit: two
+`FROM` lines and one package manager.
+
+What the image does drop is what PostgreSQL-only makes dead weight. Prisma ships a query compiler
+for every database it supports, twice over — as `.wasm` beside the CLI and as base64 modules inside
+the client runtime — and removing the four this project will never use takes 72 MB out of the image.
+The prune runs in the same layer as `npm ci`, because a later `rm` leaves the files in the layer
+below and shrinks nothing, and it asserts that the PostgreSQL variants survived, so a rename in a
+future Prisma release fails the build instead of the deployed container. `@prisma/studio-core` and
+`@prisma/dev` look like the same kind of waste and are not: the CLI imports both eagerly at startup,
+and dropping either breaks it outright.
+
+Two more things the runtime stage does not carry. Its base tag is pinned to a minor —
+`node:22.22-slim`, the version the project is developed on — rather than the floating `22-slim`:
+REQ-EVAL-07 is a claim about a build that works from scratch, and a tag that moves underneath it is
+the cheapest way to make that claim quietly false. And `npm`, `npx` and `yarn` are deleted from it.
+Nothing in the running container installs anything, and the CLI the entrypoint needs is reachable
+directly at `./node_modules/.bin/prisma`, verified in the build. That buys no space — they live in
+the base image's own layer, where deleting them on top only writes a whiteout — but it takes away
+the ability to fetch and run code inside a container that is reachable through the proxy.
+
+Nothing else is added, and in particular no `ts-node`, `tsx` or `prisma db seed`: with the seed as a
+migration there is no seed runner in the image at all.
+
+**On the one `overrides` entry.** `package.json` forces `deepmerge-ts` to `8.0.2`. It is there for
+GHSA-ggr8-5vv4-36mx — stack exhaustion on recursive object graphs, high severity, affecting
+`deepmerge-ts <8.0.0` — and `@prisma/config@7.10.0` depends on exactly `7.1.5`. Because `prisma` is a
+production dependency here, that advisory is in the deployed image's dependency set and not only in
+the toolchain: without the override `npm audit --omit=dev` reports three high findings, with it
+zero. The fix npm proposes instead is `npm audit fix --force`, which downgrades to `prisma@6.12.0` —
+a major version back, and Prisma 7 is what the `prisma.config.ts` decision above is written against.
+
+The residual risk is stated rather than hidden, because it is a major bump applied under a vendor's
+exact pin: what merges through `deepmerge-ts` in Prisma is configuration, and `prisma.config.ts`
+does not exist before M3, so nothing has exercised that path yet. The build asserts the CLI still
+starts (`prisma --version` in the runtime stage), which is where a broken config loader would
+surface first. Drop the override the moment `@prisma/config` ships a release that depends on `8.x`
+itself; until then it is load-bearing and not a leftover to tidy away.
 
 ## 5. Architecture — `REQ-ARCH-*`
 
@@ -399,13 +449,55 @@ reopened.
 with the application on a subdomain. That settles the shape: `docker compose` is not the local
 convenience here, it *is* the deployment, and Postgres runs in it rather than as a managed service.
 
-It stays **one** `docker-compose.yml`, not a base file plus a production overlay. REQ-EVAL-07 asks a
-reviewer to prove that a from-scratch start works, and that proof is worth less the further what they
-start drifts from what answers at REQ-DELIV-01's URL. The two real differences are expressed as
-environment instead of as a second file: the address the app's port publishes on — `127.0.0.1` on the
-VPS so that only the proxy can reach it, `0.0.0.0` locally so that `docker compose up` answers on the
-host — and the values in `.env`. The `db` service publishes no port in either place; the app reaches
-it over the compose network, and nothing else needs to.
+It is one base `docker-compose.yml` plus `docker-compose.prod.yml` over it. The base file is the
+local development environment: the `app` service builds the Dockerfile's `dev` stage and runs the
+working tree in watch mode, bind-mounted, so an edit on the host is compiled and restarted inside
+the container. The overlay turns that same service into the deployment — the `runtime` stage, no
+source mount, no watch command, the loopback binding — and defines no service of its own.
+
+That ordering costs something and the cost is stated rather than hidden: `docker compose up --build`
+on a clean clone brings up the development environment, not the image that answers at
+REQ-DELIV-01's URL, so REQ-EVAL-07 is evidenced with the overlay in place — one extra `-f`. The
+README carries both commands from M6, where it stops being a placeholder. The two starts share the
+database, the network, the port and the health checks; what differs is which stage of the same
+Dockerfile the application comes from.
+
+Beyond that stage, the overlay carries two differences.
+
+The first is where the values come from. The base file defaults every variable, so a clean clone
+starts with `docker compose up` and no `.env` at all — which is precisely what REQ-EVAL-07 has a
+reviewer do, and why nothing in `.env` may be mandatory. The overlay inverts that with `:?`: in
+production the same variables are required, so a deploy that is missing one refuses to start rather
+than quietly coming up on the development password. Those values are held in the repository's GitHub
+environment and reach the deploy as process environment variables, so no file in the repository ever
+carries a production secret. `DATABASE_URL` is not one of them: the database is a service in the same
+compose project rather than a managed instance, so the string the base file derives from
+`POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB` is already correct, and making it a fourth
+secret would only create a way for the two to disagree. That derivation is why the base file composes
+it from those three rather than repeating them — overriding the password alone cannot then leave the
+client holding a password the server never got. It holds on one condition, stated where the password
+is set: Compose substitutes but does not percent-encode, so a password containing `@`, `:`, `/`, `#`
+or `?` yields a URL that parses as a different host and database. The production password is
+generated from letters and digits for that reason; setting `DATABASE_URL` explicitly is the escape
+hatch when it cannot be.
+
+The second is the address the app's port publishes on: `127.0.0.1` on the VPS so that only the proxy
+can reach it, `0.0.0.0` locally so that `docker compose up` answers on the host. Compose appends
+port mappings across files rather than replacing them, so the overlay tags the list `!override`;
+the bind mount is cleared with `!reset` for the same reason, since a merged mount would otherwise
+lay the working tree back over the image's own `/app`. The watch command needs neither: it is the
+`dev` stage's `CMD`, and the overlay builds the `runtime` stage, which carries its own.
+
+The `db` service publishes no port in either place. The app reaches it over the compose network, and
+so does the Prisma CLI — which needs no container of its own, because it is already inside the
+application image: `prisma` is a production dependency there for the entrypoint's sake, so schema
+work runs as `docker compose run` against the `app` service. One `DATABASE_URL` then serves the
+application, the entrypoint and the CLI alike, and nothing needs a route in from outside. A migration
+is a file written into the repository, and it survives `--rm` because the base file already mounts
+the working tree over the `app` service's `/app` — the same mount the watch loop compiles from. That
+is a property of the development service, not of the image: an invocation against the `runtime`
+stage, which carries no mount, would need `prisma/` bind-mounted explicitly or the new migration
+would leave with the container.
 
 Three consequences follow, and they are the reason this is not a last step.
 
