@@ -1,0 +1,10 @@
+{
+  // What `nest build` compiles. The CLI prefers this file over tsconfig.json when it exists, and
+  // tsconfig.json stays the wider one so that ESLint's type-aware rules still see the specs — they
+  // are TypeScript that can be wrong in the same ways the sources can.
+  //
+  // The specs are excluded here because dist/ is what the runtime image carries: a compiled test
+  // in the deployed image is dead weight that also drags its imports along.
+  "extends": "./tsconfig.json",
+  "exclude": ["node_modules", "dist", "src/**/*.spec.ts"]
+}

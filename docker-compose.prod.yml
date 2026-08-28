@@ -17,18 +17,20 @@
 #   POSTGRES_PASSWORD  secret
 #   POSTGRES_DB        variable
 #
-# Generate POSTGRES_PASSWORD from unreserved characters only — letters and digits. The base file
-# builds DATABASE_URL by substituting these three into a URL, and Compose cannot percent-encode:
-# a password holding `@`, `:`, `/`, `#` or `?` produces a string Prisma parses as a different host
-# and database, and it fails only here, because local development never leaves `card`. Where the
-# password cannot be constrained, set DATABASE_URL explicitly and the derivation is bypassed.
+# POSTGRES_PASSWORD is unconstrained: the connection string is assembled in the application, in
+# src/config/namespaces/database.config.ts, which percent-encodes each part. Reserved characters —
+# `@`, `:`, `/`, `#`, `?` — are safe there, where a Compose-built URL would have parsed them as a
+# different host and database and failed only here, since local development never leaves `card`.
 #
-# It currently holds none of them, so a deploy stops at the first `:?` until they are created.
+# The environment currently holds none of them, so a deploy stops at the first `:?` until they are
+# created.
 #
-# DATABASE_URL is deliberately not among them. The database is a service in this same file rather
-# than a managed instance, so the connection string the base file derives from the three variables
-# above is already the right one; making it a fourth secret would only add a way for the two to
-# disagree. Override it only if the database ever moves outside compose.
+# There is no DATABASE_URL. The database is a service in this same file rather than a managed
+# instance, so the three variables above already describe it, and a fourth holding the string whole
+# would only add a way for the two to disagree. POSTGRES_HOST and POSTGRES_PORT point the client at
+# a database outside the compose network — but only the client: `db` still starts and `app` still
+# waits for it, so actually leaving means deleting that service and the `depends_on` in the base
+# file, which is an edit to these files and not a variable.
 #
 # PORT keeps its default unless the host wants another one.
 # ------------------------------------------------------------------------------------------------
@@ -45,7 +47,15 @@ services:
   app:
     build:
       target: runtime
+    # The same merge key the base file uses, applied again here. The guards do not depend on it:
+    # Compose interpolates the `x-` block above whether or not a service references it, so a
+    # missing value aborts the start either way and the base file's `${POSTGRES_USER:-card}`
+    # fallbacks are unreachable while that block exists. What this buys is that the client names
+    # the guarded definitions itself instead of inheriting defaulted ones — server and client read
+    # one definition, and removing the guards is then a change that shows up in both places rather
+    # than one that quietly leaves production on the local development password.
     environment:
+      <<: *postgres-credentials
       NODE_ENV: production
     # Cleared rather than merged: Compose would otherwise keep the base file's bind mount over the
     # image's own /app. The watch command needs no reset — it is the dev stage's CMD, and this

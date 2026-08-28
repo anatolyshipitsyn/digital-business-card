@@ -6,7 +6,7 @@ dist/
 build/
 *.tsbuildinfo
 
-# Environment — DATABASE_URL lives here, and points at the deployed database.
+# Environment — the database credentials live here, and point at the deployed database.
 # .env.example is committed on purpose; it lists the variables without their values.
 .env
 .env.*

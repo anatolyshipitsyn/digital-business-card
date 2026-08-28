@@ -7,9 +7,24 @@ x-postgres-credentials: &postgres-credentials
   POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-card}
   POSTGRES_DB: ${POSTGRES_DB:-card}
 
-# DATABASE_URL follows the same credentials by default; an explicit value still wins.
+# The application receives those same three values rather than a connection string built from
+# them; it assembles the URL itself, in src/config/namespaces/database.config.ts, where the parts
+# can be percent-encoded. The merge key is what makes them the same three: server and client read
+# one definition, so no override can leave the client holding a password the server never got.
+#
+# Where the database is not this service, POSTGRES_HOST and POSTGRES_PORT point the client at it.
+# They move the connection and nothing else: `db` still starts and `app` still waits for it to
+# report healthy, so a database outside this project means deleting that service and the
+# `depends_on` below too — an edit to these files, not a variable on its own. They sit beside the
+# merge key rather than inside it, because an address is the client's alone: the server takes none
+# from a variable. Listing them is not optional even though the variables are: Compose passes a
+# variable into a container only if the service names it, so leaving them out makes the escape
+# hatch a thing the documentation offers and Compose silently drops. Their defaults repeat the ones
+# in database.config.ts, the same duplication PORT already carries.
 x-app-environment: &app-environment
-  DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-card}:${POSTGRES_PASSWORD:-card}@db:5432/${POSTGRES_DB:-card}?schema=public}
+  <<: *postgres-credentials
+  POSTGRES_HOST: ${POSTGRES_HOST:-db}
+  POSTGRES_PORT: ${POSTGRES_PORT:-5432}
   PORT: ${PORT:-3000}
   NODE_ENV: ${NODE_ENV:-development}
 
@@ -70,9 +85,11 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
-    # Schema work runs through the app image — no CLI container of its own. The bind mount above
-    # already carries the working tree, so a migration written inside the container lands in the
-    # repository and survives `--rm`:
+    # Schema work runs through the app image — no CLI container of its own. The CLI reads its
+    # connection string from prisma.config.ts, which builds it from the same POSTGRES_* variables
+    # the application does (M2 — it does not exist yet, and neither does a schema to migrate). The
+    # bind mount above already carries the working tree, so a migration written inside the
+    # container lands in the repository and survives `--rm`:
     #   docker compose run --rm --entrypoint ./node_modules/.bin/prisma app \
     #     migrate dev --create-only
     # At runtime the entrypoint runs `prisma migrate deploy` itself, from M3 on.
