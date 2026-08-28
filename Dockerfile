@@ -53,7 +53,10 @@ CMD ["npm", "run", "start:dev"]
 # ---- build -------------------------------------------------------------------------------------
 FROM deps AS build
 
-COPY tsconfig.json nest-cli.json ./
+# tsconfig.build.json comes along because `nest build` prefers it over tsconfig.json when it is
+# present and falls back silently when it is not — and the fallback compiles the specs, which is
+# how a *.spec.js ends up in the image dist/ that the runtime stage copies.
+COPY tsconfig.json tsconfig.build.json nest-cli.json ./
 COPY src ./src
 RUN npm run build
 

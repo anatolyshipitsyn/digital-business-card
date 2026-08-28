@@ -381,6 +381,64 @@ itself; until then it is load-bearing and not a leftover to tidy away.
 | REQ-ARCH-01 | The concrete GraphQL API structure, database structure and application architecture are chosen by me | The schema, `prisma/schema.prisma` and the module layout exist and are coherent; the reasoning behind them is written down in README / this docs folder |
 | REQ-ARCH-02 | Business logic, data access and the GraphQL API are separated into distinct layers | Resolvers hold no business logic; Prisma client is not reached from resolvers |
 
+**On reading the environment.** `process.env` appears in one place, `src/config/`, and nowhere else
+in the application. The module is three parts. *Namespaces* pair a `registerAs` factory with the zod
+rules for the variables it reads, so the default and the rule that admits it are written next to each
+other rather than one in `main.ts` and the other nowhere — and the factory reads each variable
+*through* that same rule, so a variable has one parser and not a rule plus a cast beside it that can
+drift from it. *A validator* runs the union of those rules against the whole environment inside
+`ConfigModule.forRoot`, before the container is built — a missing `POSTGRES_PASSWORD` or a `NODE_ENV`
+of `staging` exits non-zero during bootstrap, naming every offending variable at once, instead of
+arriving later as an `undefined` at the first query or as a Sandbox that silently is not served.
+*Typed services* then hand out `number` and `string`, so a consumer cannot forget that everything in
+the environment starts life as `string | undefined`.
+
+Four consequences are worth stating because they are what the shape is for. `PORT` no longer needs
+the `Number(…) || …` guard `main.ts` carried: an exported but empty variable coerces to `0` and is
+refused, which is the behaviour that guard was approximating — a random free port and a process that
+looks healthy while nothing answers where it was expected. `PORT` and `POSTGRES_PORT` share one rule,
+in `src/config/namespaces/port.ts`, bounded at both ends because a port is a 16-bit number: without
+the upper bound `99999` passed validation and died later inside `listen()` on Node's own
+`ERR_SOCKET_BAD_PORT`, a stack trace where the point of validating here is a refusal by name.
+`POSTGRES_HOST` is admitted as a hostname or a bracketed IP literal and nothing else, because it is
+the one interpolated part of the connection string that cannot be percent-encoded — encoding it
+would encode the dots between its labels. Unchecked it was the worst of the three holes: a URL
+parser reads the *last* `@` as the userinfo delimiter, so a host of `x@evil.host` produced
+`postgresql://card:card@x@evil.host:5432/card` and sent the connection, and the password it carries,
+somewhere nobody named, without a message. The
+application does not read `.env`: Compose reads it, substitutes into `docker-compose.yml` and passes
+process environment variables, so `ignoreEnvFile` keeps one name from acquiring two sets of defaults.
+And the container fails on a bad environment before the port is bound, so the failure shows up as a
+service that never reaches `healthy` rather than one that answers wrongly.
+
+The alternative was reading `process.env` at each use site, which for three variables is shorter. It
+is rejected on REQ-EVAL-07: a from-scratch start is the claim this project has to make, and the
+failures that break it are configuration failures. A start that refuses with the variable's name is
+worth more here than the lines it costs. The scope of it is held to what is read — two namespaces,
+two services — and grows only when a variable does.
+
+**On the first tests, and why here.** REQ-EVAL-06 asks for tests where they earn their place, which
+is a bar and not an invitation to cover everything. The config namespaces are the first code in this
+repository to clear it: the URL assembly and the zod rules are pure functions over their arguments,
+they take milliseconds to exercise, and both of their interesting failures are invisible where the
+work is done. Percent-encoding only matters when the password is not `card`, which is to say never
+locally and always in production; the environment rules only matter on the start that is already
+going wrong. `docker compose up` reports `healthy` either way. That combination — cheap to check,
+silent when broken, and broken only where nobody is looking — is what earns a test, and the three
+spec files hold twenty-one cases and no mocks.
+
+Jest, because it is what a NestJS project is expected to carry, and ts-jest to read TypeScript with
+the repository's own `tsconfig.json`. Two packages, not three: the specs take `describe`, `it` and
+`expect` from `@jest/globals` rather than `@types/jest`, so no `types` entry lands in
+`tsconfig.json` for every source file to pay for. One wrinkle is worth recording because it looks
+like a mistake otherwise: `@nestjs/config` v12 ships ESM only. The application is untouched by that
+— it compiles to CommonJS and Node 22 resolves `require()` of an ES module — but Jest's own module
+registry does not, so that one package is transpiled on the way in and carved out of
+`transformIgnorePatterns`, which is why the config names a `node_modules` path at all. A second
+`tsconfig.build.json` keeps the specs out of `nest build`, and so out of `dist/` and the runtime
+image; the Dockerfile copies it for that reason, since `nest build` falls back to `tsconfig.json`
+silently when it is absent and the fallback compiles them.
+
 ## 6. Evaluation criteria — `REQ-EVAL-*`
 
 > Что оценивается:
@@ -470,16 +528,31 @@ reviewer do, and why nothing in `.env` may be mandatory. The overlay inverts tha
 production the same variables are required, so a deploy that is missing one refuses to start rather
 than quietly coming up on the development password. Those values are held in the repository's GitHub
 environment and reach the deploy as process environment variables, so no file in the repository ever
-carries a production secret. `DATABASE_URL` is not one of them: the database is a service in the same
-compose project rather than a managed instance, so the string the base file derives from
-`POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB` is already correct, and making it a fourth
-secret would only create a way for the two to disagree. That derivation is why the base file composes
-it from those three rather than repeating them — overriding the password alone cannot then leave the
-client holding a password the server never got. It holds on one condition, stated where the password
-is set: Compose substitutes but does not percent-encode, so a password containing `@`, `:`, `/`, `#`
-or `?` yields a URL that parses as a different host and database. The production password is
-generated from letters and digits for that reason; setting `DATABASE_URL` explicitly is the escape
-hatch when it cannot be.
+carries a production secret. There is no `DATABASE_URL` among them, and none anywhere: the database
+is a service in the same compose project rather than a managed instance, so the connection string is
+derivable from `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB`, and a fourth variable holding
+it whole would only create a way for the two to disagree. The base file therefore hands the
+application the same three values it initialises the server with — one definition, reached by both
+services through a YAML merge key, so overriding the password cannot leave the client holding a
+password the server never got.
+
+Where the string is assembled is the second half of that decision, and it is the application, in
+`src/config/namespaces/database.config.ts`, not the Compose file. Compose substitutes literally and
+cannot percent-encode: a password containing `@`, `:`, `/`, `#` or `?` yielded a URL that parses as a
+different host and database, and it fails only where the password is not `card`, which is to say only
+in production. `encodeURIComponent` on each part removes the failure instead of documenting it, so
+the production password is no longer constrained to letters and digits. The host is the exception,
+and it is checked rather than escaped: escaping it would encode the dots between its labels, so it
+is admitted as a hostname or a bracketed IP literal and refused if it carries a port, credentials
+or a path — see *On reading the environment* for what an unchecked one did.
+
+`POSTGRES_HOST` and `POSTGRES_PORT`, defaulted to the compose service and `5432`, are what an
+explicit `DATABASE_URL` used to be — the escape hatch for a database that is not this one. They are
+half of that move and it is worth being exact about which half: they point the *client* elsewhere,
+and the compose files still define `db` and still make `app` wait for it to report healthy. An
+overlay cannot delete a service the base file declares, so a database outside this project means
+removing that service and its `depends_on` from the files, not setting two variables. The variables
+are what make the application portable; the compose topology is a separate edit.
 
 The second is the address the app's port publishes on: `127.0.0.1` on the VPS so that only the proxy
 can reach it, `0.0.0.0` locally so that `docker compose up` answers on the host. Compose appends
@@ -491,13 +564,16 @@ lay the working tree back over the image's own `/app`. The watch command needs n
 The `db` service publishes no port in either place. The app reaches it over the compose network, and
 so does the Prisma CLI — which needs no container of its own, because it is already inside the
 application image: `prisma` is a production dependency there for the entrypoint's sake, so schema
-work runs as `docker compose run` against the `app` service. One `DATABASE_URL` then serves the
-application, the entrypoint and the CLI alike, and nothing needs a route in from outside. A migration
-is a file written into the repository, and it survives `--rm` because the base file already mounts
-the working tree over the `app` service's `/app` — the same mount the watch loop compiles from. That
-is a property of the development service, not of the image: an invocation against the `runtime`
-stage, which carries no mount, would need `prisma/` bind-mounted explicitly or the new migration
-would leave with the container.
+work runs as `docker compose run` against the `app` service. From M2 the CLI will take its
+connection string from `prisma.config.ts`, built from the same `POSTGRES_*` variables the
+application reads, so one set of credentials serves the application, the entrypoint and the CLI
+alike and nothing needs a route in from outside. That file does not exist yet, and neither does a
+schema to migrate: until it does, the invocation below has no connection string, which is the M2
+step and not a gap left behind here. A migration is a file written into the repository, and it
+survives `--rm` because the base file already mounts the working tree over the `app` service's
+`/app` — the same mount the watch loop compiles from. That is a property of the development service,
+not of the image: an invocation against the `runtime` stage, which carries no mount, would need
+`prisma/` bind-mounted explicitly or the new migration would leave with the container.
 
 Three consequences follow, and they are the reason this is not a last step.
 
@@ -516,9 +592,9 @@ Three consequences follow, and they are the reason this is not a last step.
   unreachable database still exits non-zero, exactly as REQ-INIT-01 requires, and the restart policy
   only decides what happens next — a database slow to come back heals without a visit.
 
-`PORT` and `DATABASE_URL` still come from the environment. Nothing about a VPS requires it, but a
-container that reads its port and its connection string from the outside is the one that stays
-portable, and the cost is zero.
+`PORT` and the `POSTGRES_*` variables still come from the environment. Nothing about a VPS requires
+it, but a container that reads its port and its database credentials from the outside is the one that
+stays portable, and the cost is zero.
 
 ---
 
