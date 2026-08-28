@@ -36,11 +36,12 @@ talks to anything yet.
 
 **Exit criteria**
 
-- [ ] `npm run start` boots the application on the port given by `PORT` and it answers there
-- [ ] `docker compose up -d db` reaches state `healthy`
-- [ ] `package.json` declares `engines.node`
-- [ ] Host-side access to the compose database is settled, so that `prisma` commands can run at all
-- [ ] `REQ-STACK-02` verifies
+- [x] `docker compose up --build` brings `db` and `app` to `healthy` with no `.env` present, and
+      the application answers on the port given by `PORT`
+- [x] `docker compose up -d db` reaches state `healthy`
+- [x] `package.json` declares `engines.node`
+- [x] Host-side access to the compose database is settled, so that `prisma` commands can run at all
+- [x] `REQ-STACK-02` verifies
 
 ## M2 — Schema and data access
 
@@ -93,9 +94,11 @@ one eager query shape.
 
 ## M5 — It works from scratch
 
-The application packaged as an image and wired into the same Compose file as the database, so a
-machine holding no prior state can start it with one command. The entrypoint and the runtime image
-carry failures that appear nowhere else: an unprepared schema, a signal that never reaches the
+The packaging itself — the image, and the `app` service beside the database in the same Compose
+file — landed early, at M1, when running the Prisma CLI through the application image removed the
+need for a container of its own. What M5 owns is proving it: that a machine holding no prior state
+starts the whole thing with one command. The entrypoint and the runtime image carry failures that
+appear nowhere else: an unprepared schema, a signal that never reaches the
 process, a CLI absent from the production dependency set. So this milestone proves the packaging,
 not only the behaviour. What is measured here is what the compliance report quotes, so evidence is
 captured as it is produced rather than reconstructed at M6.
