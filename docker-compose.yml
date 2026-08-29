@@ -8,7 +8,7 @@ x-postgres-credentials: &postgres-credentials
   POSTGRES_DB: ${POSTGRES_DB:-card}
 
 # The application receives those same three values rather than a connection string built from
-# them; it assembles the URL itself, in src/config/namespaces/database.config.ts, where the parts
+# them; it assembles the URL itself, in src/config/namespaces/database-url.ts, where the parts
 # can be percent-encoded. The merge key is what makes them the same three: server and client read
 # one definition, so no override can leave the client holding a password the server never got.
 #
@@ -20,7 +20,7 @@ x-postgres-credentials: &postgres-credentials
 # from a variable. Listing them is not optional even though the variables are: Compose passes a
 # variable into a container only if the service names it, so leaving them out makes the escape
 # hatch a thing the documentation offers and Compose silently drops. Their defaults repeat the ones
-# in database.config.ts, the same duplication PORT already carries.
+# in database-url.ts, the same duplication PORT already carries.
 x-app-environment: &app-environment
   <<: *postgres-credentials
   POSTGRES_HOST: ${POSTGRES_HOST:-db}
@@ -75,24 +75,32 @@ services:
       db:
         condition: service_healthy
     healthcheck:
-      # Use Node's built-in fetch so the image needs no curl or wget.
+      # Use Node's built-in fetch so the image needs no curl or wget. Readiness, not liveness:
+      # Docker restarts a container when its process exits, never for a failed health check, so
+      # this status does not cost a restart — it drives `depends_on: service_healthy` and the line
+      # `docker compose ps` prints. An application that cannot reach its database has no business
+      # appearing there as healthy. An orchestrator that does restart on a failed probe takes
+      # /health/liveness instead; see "On waiting for the database" in
+      # docs/requirements/REQUIREMENTS.md.
       test:
         - CMD
         - node
         - -e
-        - 'fetch("http://127.0.0.1:${PORT:-3000}/health").then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))'
+        - 'fetch("http://127.0.0.1:${PORT:-3000}/health/readiness").then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))'
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 20s
     # Schema work runs through the app image — no CLI container of its own. The CLI reads its
     # connection string from prisma.config.ts, which builds it from the same POSTGRES_* variables
-    # the application does (M2 — it does not exist yet, and neither does a schema to migrate). The
-    # bind mount above already carries the working tree, so a migration written inside the
-    # container lands in the repository and survives `--rm`:
+    # the application does. The bind mount above already carries the working tree, so a migration
+    # written inside the container lands in the repository and survives `--rm`:
     #   docker compose run --rm --entrypoint ./node_modules/.bin/prisma app \
-    #     migrate dev --create-only
-    # At runtime the entrypoint runs `prisma migrate deploy` itself, from M3 on.
+    #     migrate dev --create-only --name <what_it_does>
+    # and applying the queue to the local database is the same command the deployed entrypoint
+    # will run:
+    #   docker compose run --rm --entrypoint ./node_modules/.bin/prisma app migrate deploy
+    # At runtime the entrypoint runs that itself, from M3 on.
 
 volumes:
   db-data:

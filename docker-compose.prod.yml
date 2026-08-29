@@ -18,7 +18,7 @@
 #   POSTGRES_DB        variable
 #
 # POSTGRES_PASSWORD is unconstrained: the connection string is assembled in the application, in
-# src/config/namespaces/database.config.ts, which percent-encodes each part. Reserved characters —
+# src/config/namespaces/database-url.ts, which percent-encodes each part. Reserved characters —
 # `@`, `:`, `/`, `#`, `?` — are safe there, where a Compose-built URL would have parsed them as a
 # different host and database and failed only here, since local development never leaves `card`.
 #
