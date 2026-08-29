@@ -262,19 +262,43 @@ initialization the official image starts a temporary server with `listen_address
 on the socket and would report ready before the real one exists; a TCP probe is refused for exactly
 as long as it should be. A `start_period` keeps those early refusals from consuming `retries`.
 
-`app` is probed by fetching `/health` with `node -e` and `fetch`: `node:*-slim` carries neither
-`curl` nor `wget`, and pulling a package into the image to run a health check would be a poor
-trade. What it asks for is the application's own `/health` route — a `HealthModule` holding one
-controller — and it reads the status, so an application answering 500 everywhere does not pass.
+`app` is probed by fetching `/health/readiness` with `node -e` and `fetch`: `node:*-slim` carries
+neither `curl` nor `wget`, and pulling a package into the image to run a health check would be a
+poor trade. It reads the status, so an application answering 500 everywhere does not pass.
 
-The probe deliberately does not touch the database. A liveness check that queries Postgres flaps on
-any transient blip and kills a container that is in fact healthy, and by the time the application
-runs at all the migrations have already proven the database reachable.
+**Two routes, and which one Compose asks.** `HealthModule` holds one controller and answers two
+different questions, neither of them at a bare `/health` — that path 404s on purpose, because a
+default route would have to pick one silently and be read as the other.
 
-The route is `@nestjs/terminus`, with an empty indicator list: reaching the handler already proves
-the process is up and the HTTP stack answers, and there is nothing else to assert yet. From M2 it
-gains a `PrismaHealthIndicator`, which Terminus ships — so the readiness check that M5 wants costs
-no further dependency and no change to the probe. Terminus is what pins the framework to NestJS 11:
+`GET /health/liveness` has an empty indicator list. Reaching the handler already proves the process
+is up and the HTTP stack answers, which is all a liveness question may rest on; it is what an
+orchestrator that restarts containers should be pointed at.
+
+`GET /health/readiness` pings PostgreSQL through Terminus' own `PrismaHealthIndicator` — no further
+dependency — and answers 503 when it cannot be reached. It exists because on Prisma 7 a client that
+constructed successfully proves nothing about the database being there: the driver adapter opens
+connections lazily, so absent a live probe the only evidence of an unreachable database would be a
+failed query. `PrismaService`'s own startup statement (see *On the data access layer*) already rules
+that out once, at bootstrap — but the process deliberately keeps running if the database disappears
+afterward, the same asymmetry `src/health/health.service.ts` argues for this route: an unreachable
+database is a reason to take an instance out of rotation, not a reason to restart it, so a one-time
+gate at startup cannot be what this route leans on. It is the readiness probe, asked again on every
+interval, that tells `docker compose ps` and `depends_on` the truth *now*, after bootstrap has long
+finished.
+
+Compose probes **readiness**, and the reason is what `unhealthy` does here rather than what the word
+suggests. Docker's `restart` policies act on process exit; the engine does not restart a container
+for failing its health check — Swarm and Kubernetes do, plain Compose does not. So the flapping
+argument that would keep a database query out of a restart-triggering probe does not apply to this
+file: what the status actually drives is `depends_on: condition: service_healthy` and the line a
+reviewer reads in `docker compose ps`. Both are better served by the truthful answer. An application
+that is running but cannot reach its database is not a thing `docker compose ps` should call
+healthy, and REQ-EVAL-07 asks for a from-scratch start where the data is genuinely reachable — a
+probe that cannot fail on the database cannot witness that.
+
+This is the one place the two questions are joined, so it is stated rather than left implicit: if
+this project ever runs where an orchestrator restarts on a failed probe, that probe takes
+`/health/liveness` and this decision is reopened, not inherited. Terminus is what pins the framework to NestJS 11:
 11.1.1 declares `@nestjs/common ^10 || ^11`, and forcing it onto 12 with `--legacy-peer-deps` would
 leave a reviewer's `npm ci` failing on ERESOLVE unless the flag were baked into `.npmrc`.
 
@@ -321,10 +345,16 @@ a command of the `prisma` CLI package, which conventionally sits in `devDependen
 stage built with `npm ci --omit=dev` therefore fails with `prisma: not found`, and fails only once
 deployed, because the development image had it. `prisma` is a production dependency here for that
 reason; it is not a mistake to be tidied away. The runtime image also keeps `prisma/schema.prisma`,
-`prisma/migrations/` and the client generated at build time — and, on Prisma 7, `prisma.config.ts`
-with them. The datasource URL is no longer allowed inside `schema.prisma` there: the schema declares
-the provider and nothing else, and the connection string is read from the config file, so an image
-that omits it has a CLI that cannot find the database.
+`prisma/migrations/` and — on Prisma 7 — `prisma.config.ts` with them. The datasource URL is no
+longer allowed inside `schema.prisma` there: the schema declares the provider and nothing else, and
+the connection string is read from the config file, so an image that omits it has a CLI that cannot
+find the database. `prisma.config.ts` does not travel alone: it imports the URL assembly in
+`src/config/namespaces/database-url.ts`, and that import resolves to a source file rather than to
+anything in `dist/`, so `database-url.ts` and the `port.ts` it depends on are copied beside it. This
+is asserted rather than remembered — the stage runs `prisma validate`, which loads the config and the
+schema and connects to nothing, so an image whose CLI cannot resolve its own config fails the build
+instead of the deployment. The generated client needs no line of its own: Prisma 7 writes it as
+TypeScript into `src/`, so `nest build` compiles it and it arrives in the image inside `dist/`.
 
 The base image is Debian-slim rather than Alpine, and the reason is glibc rather than Prisma. On
 Prisma 7 the musl target resolves on its own — `node:22-alpine` with `apk add openssl` was measured
@@ -364,10 +394,12 @@ zero. The fix npm proposes instead is `npm audit fix --force`, which downgrades 
 a major version back, and Prisma 7 is what the `prisma.config.ts` decision above is written against.
 
 The residual risk is stated rather than hidden, because it is a major bump applied under a vendor's
-exact pin: what merges through `deepmerge-ts` in Prisma is configuration, and `prisma.config.ts`
-does not exist before M3, so nothing has exercised that path yet. The build asserts the CLI still
-starts (`prisma --version` in the runtime stage), which is where a broken config loader would
-surface first. Drop the override the moment `@prisma/config` ships a release that depends on `8.x`
+exact pin: what merges through `deepmerge-ts` in Prisma is configuration, which is exactly what
+`prisma.config.ts` is. That path is now exercised — `generate`, `migrate dev --create-only` and
+`migrate deploy` all load the file and all ran under the override — so the risk is no longer
+untested, only unproven against future config shapes. The build asserts the CLI still starts
+(`prisma --version` in the runtime stage), which is where a broken config loader would surface
+first. Drop the override the moment `@prisma/config` ships a release that depends on `8.x`
 itself; until then it is load-bearing and not a leftover to tidy away.
 
 ## 5. Architecture — `REQ-ARCH-*`
@@ -464,6 +496,59 @@ silently when it is absent and the fallback compiles them.
 | REQ-EVAL-06 | Readable, maintainable code | Lint/format clean, consistent naming, tests where they earn their place |
 | REQ-EVAL-07 | The application works correctly after a from-scratch start | Clean clone + `docker compose up --build` on a machine with no prior state, no volume carried over from an earlier run; both services reach `healthy` and the coverage query answers |
 
+**On the data access layer (REQ-EVAL-04).** One `PrismaService`, in `src/prisma/`, extends the
+generated client and is the only place it is constructed. It owns the connection lifecycle at both
+ends. At startup it issues `SELECT 1` from `onModuleInit`, so an unreachable database or a wrong
+password fails the bootstrap instead of arriving as a GraphQL error at the first query the
+reviewer runs — and it is a statement rather than `$connect()` for a reason that is specific to
+Prisma 7: with the Rust query engine gone the driver adapter opens connections lazily, so
+`$connect()` resolves against an unresolvable host, a wrong password and a closed port alike, and a
+bootstrap gated on it reports success for a database that is not there. At shutdown it calls
+`$disconnect()` in `onModuleDestroy`, which is the ordered teardown `enableShutdownHooks()` in
+`main.ts` exists to reach. `PrismaModule` is deliberately not `@Global()` — the config module is,
+because every layer legitimately reads configuration, whereas database access is exactly what
+REQ-ARCH-02 wants confined; a module that reaches the database imports this one and says so in its
+`imports`, where a review can see it.
+
+Prisma 7 changed what "constructing the client" means, and the change is visible in `package.json`.
+The Rust query engine is gone, and with it the `datasourceUrl` constructor option: the client now
+connects through a driver adapter, so `@prisma/adapter-pg` is a production dependency and the pool
+is node-postgres'. It is given the very string `prisma.config.ts` gives the CLI, from
+`src/config/namespaces/database-url.ts` — which is why the assembly moved into a file of its own,
+apart from the `registerAs` factory that wraps it: the CLI's TypeScript loader can import a module
+whose only dependency is zod, where importing the namespace would pull `@nestjs/config` and the
+container behind it into a process that only wants a URL. One assembly, one percent-encoding, and no
+way for `migrate deploy` and the running application to address different databases.
+
+The generated client is TypeScript under `src/generated/`, not a package in `node_modules`. It is
+build output and is git-ignored as such: `prisma generate` reproduces it from `prisma/schema.prisma`,
+which is the file under review. It runs from an npm lifecycle hook on every script that compiles or
+type-checks the tree — `prebuild`, `prelint`, `pretest`, and the pre-existing `prestart:dev` — so a
+clean clone needs no remembered extra step: whichever of those a reviewer or CI runs first regenerates
+the client before anything reads it. The Docker `build` stage does not call the CLI itself; it runs
+`npm run build`, and `prebuild` fires ahead of `nest build` as part of that one command.
+
+A single `prepare` script looks like the obvious way to say this once, and is rejected for a reason
+specific to this Dockerfile: `prepare` fires on `npm ci`, and `npm ci` runs twice in the image, in two
+stages that do not yet have `prisma/` on disk when it does — the `deps` stage installs from
+`package.json` and `package-lock.json` alone, before `prisma` is copied in, and the runtime stage's
+`npm ci --omit=dev` runs before its own later `COPY prisma ./prisma`. A `prepare` hook would fail
+both builds looking for a schema that is not there yet. Per-script hooks, tied to the commands that
+actually need the client, are what a clean clone requires without breaking the image. `generate`
+connects to nothing, which is why `prisma.config.ts` omits the datasource altogether when the
+environment names no database: the image build has no credentials and should not need invented ones.
+
+**On the indexes.** Every child table carries exactly one composite index, leading with `profileId`.
+Three of them are `@@unique` — `(profileId, url)` on `Link`, `(profileId, name)` on `Skill` and on
+`Project` — because the same resource, skill or project listed twice on one card is a data error and
+not a preference; the index is the byproduct of stating that. `Experience` has no such natural key,
+since the same role at the same company can genuinely be held twice, so it takes a plain
+`@@index([profileId, startDate])`, and it carries `startDate` because that is what the list is
+ordered by. The reason each one leads with `profileId` is that PostgreSQL does not index a foreign
+key column on its own: without it the referential check behind `onDelete: Cascade` scans the child
+table. None of this is a performance claim at this row count — a business card holds a handful of
+rows — it is the shape being right, and the constraints being real.
+
 **On resolving the relations.** Each of the profile's four relations — `links`, `skills`,
 `experience`, `projects` — is a `@ResolveField`, not a single `findUnique` with `include`. Neither
 shape produces an N+1, so that is not what decides it; over-fetching is. An `include` loads all four
@@ -490,6 +575,16 @@ The guarantee is conditional on two things holding: the root stays a single obje
 list root would reintroduce the problem at once, and then the relation resolvers really would fire
 once per parent row — and achievements stay a column. If either changes, this note is what has to be
 reopened.
+
+**On where that count is read.** From the application's own log. `PrismaService` constructs the
+client with `log: [{ emit: 'event', level: 'query' }]` and subscribes to the event, writing each
+statement and its duration to the Nest logger at `debug` — so counting them is reading
+`docker compose logs app` around one Sandbox request, not attaching a profiler or turning on
+`log_statement` in PostgreSQL. It is wired in the data access layer because that is where it belongs
+— the statements are the client's, not the resolvers' — and it was wired at M2 rather than at M4 so
+that the evidence exists before the code whose behaviour it has to characterise. Development only:
+in production it would be one write per statement per request, on an application whose entire payload
+is a single profile, and the parameters it would carry are that profile's own data.
 
 ## 7. Deliverables — `REQ-DELIV-*`
 
@@ -537,7 +632,7 @@ services through a YAML merge key, so overriding the password cannot leave the c
 password the server never got.
 
 Where the string is assembled is the second half of that decision, and it is the application, in
-`src/config/namespaces/database.config.ts`, not the Compose file. Compose substitutes literally and
+`src/config/namespaces/database-url.ts`, not the Compose file. Compose substitutes literally and
 cannot percent-encode: a password containing `@`, `:`, `/`, `#` or `?` yielded a URL that parses as a
 different host and database, and it fails only where the password is not `card`, which is to say only
 in production. `encodeURIComponent` on each part removes the failure instead of documenting it, so
@@ -564,12 +659,10 @@ lay the working tree back over the image's own `/app`. The watch command needs n
 The `db` service publishes no port in either place. The app reaches it over the compose network, and
 so does the Prisma CLI — which needs no container of its own, because it is already inside the
 application image: `prisma` is a production dependency there for the entrypoint's sake, so schema
-work runs as `docker compose run` against the `app` service. From M2 the CLI will take its
-connection string from `prisma.config.ts`, built from the same `POSTGRES_*` variables the
-application reads, so one set of credentials serves the application, the entrypoint and the CLI
-alike and nothing needs a route in from outside. That file does not exist yet, and neither does a
-schema to migrate: until it does, the invocation below has no connection string, which is the M2
-step and not a gap left behind here. A migration is a file written into the repository, and it
+work runs as `docker compose run` against the `app` service. The CLI takes its connection string
+from `prisma.config.ts`, which calls the same assembly the application's `database` namespace does,
+so one set of credentials serves the application, the entrypoint and the CLI alike and nothing needs
+a route in from outside. A migration is a file written into the repository, and it
 survives `--rm` because the base file already mounts the working tree over the `app` service's
 `/app` — the same mount the watch loop compiles from. That is a property of the development service,
 not of the image: an invocation against the `runtime` stage, which carries no mount, would need
