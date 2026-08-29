@@ -1,0 +1,4 @@
+# `npm run format` walks src/**/*.ts, which now includes the generated Prisma client. It is not
+# ours to format: the next `prisma generate` overwrites it, so formatting it only produces a diff
+# that reappears.
+src/generated/

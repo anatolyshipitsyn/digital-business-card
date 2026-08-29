@@ -3,6 +3,10 @@ node_modules/
 
 # Build output — REQ-STACK-02 is verified on the assumption this is not in git
 dist/
+# The Prisma client. Prisma 7 generates it as TypeScript into the source tree rather than into
+# node_modules; it is build output all the same, reproduced by `prisma generate` from
+# prisma/schema.prisma, which is the file under review.
+src/generated/
 build/
 *.tsbuildinfo
 

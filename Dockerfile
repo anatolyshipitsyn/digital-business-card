@@ -56,8 +56,16 @@ FROM deps AS build
 # tsconfig.build.json comes along because `nest build` prefers it over tsconfig.json when it is
 # present and falls back silently when it is not — and the fallback compiles the specs, which is
 # how a *.spec.js ends up in the image dist/ that the runtime stage copies.
-COPY tsconfig.json tsconfig.build.json nest-cli.json ./
+COPY tsconfig.json tsconfig.build.json nest-cli.json prisma.config.ts ./
+COPY prisma ./prisma
 COPY src ./src
+
+# Prisma 7 generates the client as TypeScript into src/generated/, which is not committed — so it
+# has to exist before tsc runs. `npm run build` regenerates it through its own prebuild hook (see
+# package.json), and once it exists `nest build` compiles it along with everything else, so the
+# runtime stage needs no separate copy of the client. `generate` connects to nothing, which is why
+# prisma.config.ts leaves the datasource unset when the environment names no database: this stage
+# has no credentials and should not need invented ones.
 RUN npm run build
 
 # ---- runtime -----------------------------------------------------------------------------------
@@ -74,14 +82,31 @@ RUN npm ci --omit=dev \
 
 COPY --from=build /app/dist ./dist
 
+# What the Prisma CLI needs in this image. The entrypoint runs `migrate deploy` from M3 on, and on
+# Prisma 7 the connection string is no longer allowed inside schema.prisma: the schema declares the
+# provider and nothing else, and the CLI reads the URL from prisma.config.ts.
+COPY prisma.config.ts ./
+COPY prisma ./prisma
+
+# prisma.config.ts imports the application's own URL assembly so that `migrate deploy` and the
+# running application cannot address different databases. That import resolves to a source file,
+# not to anything in dist/, so the two modules it reaches travel with it. They are the whole of the
+# import graph: database-url.ts imports zod and ./port, and port.ts imports zod.
+COPY src/config/namespaces/database-url.ts src/config/namespaces/port.ts ./src/config/namespaces/
+
+# `validate` loads prisma.config.ts and the schema and connects to nothing, so it asserts at build
+# time precisely what was broken here: an image whose CLI cannot resolve the modules its config
+# imports. Without it the failure appears once, in the deployed container, at the migration that
+# was supposed to prepare the database.
+RUN ./node_modules/.bin/prisma validate > /dev/null
+
 USER node
 
 # Exec form on purpose: node becomes PID 1 and Docker signals it directly, which is what makes
 # `enableShutdownHooks()` in src/main.ts reachable. A shell form would leave sh holding PID 1.
 #
-# The M3 database work adds the rest of what "On filling the database" in
-# docs/requirements/REQUIREMENTS.md describes for this stage, and none of it exists yet: the
-# entrypoint running `prisma migrate deploy`, the copied `prisma/` directory and `prisma.config.ts`,
-# the prune of the query compilers for the four databases this project never uses, and the removal
-# of npm/npx/yarn. That list is the checklist for this stage, not a description of it.
+# What M3 still adds to this stage: the entrypoint that runs `prisma migrate deploy` before exec'ing
+# the application, the prune of the query compilers for the four databases this project never uses,
+# and the removal of npm/npx/yarn. The schema, the migrations and the config the CLI needs are
+# already here — see "On filling the database" in docs/requirements/REQUIREMENTS.md.
 CMD ["node", "dist/main.js"]

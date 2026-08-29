@@ -1,0 +1,110 @@
+// The database structure REQ-ARCH-01 leaves to me: one profile, and the four collections the
+// assignment lists under it. The reasoning behind the shapes that are not obvious — two date
+// columns for the employment period, achievements as an array rather than a table — is in
+// "On the employment period" and "On modelling achievements" in docs/requirements/REQUIREMENTS.md.
+
+generator client {
+  // Prisma 7's Rust-free generator. It writes plain TypeScript into the application's own tree
+  // instead of into node_modules, so `nest build` compiles the client along with the sources and
+  // the runtime image carries it in dist/ without a copy step of its own.
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  // NestJS compiles to CommonJS; the generator is ESM-first and would otherwise emit `import`
+  // statements the compiled application cannot require.
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  // No `url` here: on Prisma 7 the connection string belongs to prisma.config.ts, which builds it
+  // from the same POSTGRES_* variables the application does — one assembly, in
+  // src/config/namespaces/database-url.ts, percent-encoding included.
+  provider = "postgresql"
+}
+
+// Ids are `String` with no `@default`. `cuid()` and `uuid()` are generated client-side and leave
+// no default in the database, so the seed migration's raw INSERTs would fail on a null id; the
+// seed writes its ids out instead, which keeps the foreign keys in that file readable and stable
+// across a reset. See "On filling the database" in docs/requirements/REQUIREMENTS.md.
+
+/// The card itself. The API exposes exactly one, reached by the root `profile` query.
+///
+/// That row is addressed by its id, which is the fixed unique key REQ-API-03 asks the resolver to
+/// read — the seed writes a slug there rather than a generated value, so the root query is a
+/// `findUnique` on a known key and never "whichever row comes back first". No second slug column:
+/// the id already is one.
+model Profile {
+  id          String @id
+  name        String
+  /// The «краткое описание» of the assignment: a paragraph, not a headline.
+  description String
+
+  links      Link[]
+  skills     Skill[]
+  experience Experience[]
+  projects   Project[]
+}
+
+/// A professional resource: GitHub, LinkedIn or another. `label` is what the client renders.
+model Link {
+  id    String @id
+  label String
+  url   String
+
+  profileId String
+  profile   Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  // Every child table carries exactly one composite index, leading with profileId. It does two
+  // jobs: PostgreSQL does not index a foreign key column on its own, so without it the referential
+  // check on the parent row scans this table; and the uniqueness is a constraint worth having —
+  // the same resource listed twice on one card is a data error, not a preference.
+  @@unique([profileId, url])
+}
+
+/// One entry of «Список навыков».
+model Skill {
+  id   String @id
+  name String
+
+  profileId String
+  profile   Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, name])
+}
+
+/// One position held: company, role, period, and what came out of it.
+model Experience {
+  id       String @id
+  company  String
+  position String
+
+  /// The period, as two columns rather than one free-text string, so that the newest-first
+  /// ordering is `orderBy: { startDate: desc }` and not a parser. A null `endDate` is the current
+  /// position — no sentinel string to compare against later.
+  startDate DateTime  @db.Date
+  endDate   DateTime? @db.Date
+
+  /// «Ваши достижения»: a column on the position, not a table. They have no identity and nothing
+  /// queries them on their own; a table would invent an entity and then need a DataLoader to undo
+  /// the N+1 it created. A PostgreSQL array column is what makes that choice available.
+  achievements String[]
+
+  profileId String
+  profile   Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  // No natural uniqueness here — the same role at the same company can genuinely be held twice —
+  // so this one is a plain index, and it carries startDate because that is what the list is
+  // ordered by.
+  @@index([profileId, startDate])
+}
+
+/// One project: what it is called, and where it can be seen.
+model Project {
+  id   String @id
+  name String
+  url  String
+
+  profileId String
+  profile   Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, name])
+}

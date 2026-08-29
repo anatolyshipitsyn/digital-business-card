@@ -4,6 +4,8 @@
 .github
 node_modules
 dist
+# Regenerated in the build stage; a copy from the host would only be a stale one.
+src/generated
 *.tsbuildinfo
 .env
 .env.*
