@@ -51,9 +51,9 @@ logging is wired in here rather than later, because `REQ-EVAL-03` is evidenced f
 
 **Exit criteria**
 
-- [ ] `prisma migrate deploy` creates the schema on an empty database
-- [ ] `npm run lint` exits clean
-- [ ] `REQ-EVAL-04` verifies
+- [x] `prisma migrate deploy` creates the schema on an empty database
+- [x] `npm run lint` exits clean
+- [x] `REQ-EVAL-04` verifies
 
 ## M3 — The data is seeded
 
