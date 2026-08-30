@@ -100,7 +100,7 @@ services:
     # and applying the queue to the local database is the same command the deployed entrypoint
     # will run:
     #   docker compose run --rm --entrypoint ./node_modules/.bin/prisma app migrate deploy
-    # At runtime the entrypoint runs that itself, from M3 on.
+    # At runtime the image entrypoint runs that before the application command.
 
 volumes:
   db-data:
