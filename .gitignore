@@ -23,6 +23,12 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Working notes for the agent workflow — design specs and implementation plans written while a
+# milestone is in progress. They are scaffolding, not deliverables: AGENTS.md places the decisions
+# in docs/requirements/REQUIREMENTS.md, and a second place describing the same choices is what
+# REQ-EVAL-01 counts against.
+docs/superpowers/
+
 # Editors and OS
 .DS_Store
 .idea/

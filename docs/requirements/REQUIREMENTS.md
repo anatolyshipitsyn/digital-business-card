@@ -94,8 +94,13 @@ review right there. The strictness is ours, so do not later "reconcile" it away 
 It fixes names that intuition will argue with:
 
 - Root field `profile`, singular. Exactly one profile is addressable, so it is resolved by a fixed
-  unique key — a slug the seed writes and the resolver reads, never "whichever row comes back first".
-  How that row is written is decided under REQ-INIT-02.
+  unique key: the `isDefault` column, `Boolean?` and `@unique`. PostgreSQL treats nulls as distinct
+  in a unique index, so every other row can hold null while at most one holds `true`, and the
+  database is what enforces that — the resolver does a `findUnique` and never "whichever row comes
+  back first". An earlier revision of this note put a slug in the resolver instead; that works, but
+  it puts the same literal in two files with only a comment holding them together, and the flag puts
+  the answer in the data, where the seed already is. How that row is written is decided under
+  REQ-INIT-02.
 - `experience`, not `experiences`, even though the field returns a list. Prisma will naturally name
   that relation `experiences`; the GraphQL field must not inherit it. A resolver that hands back a
   Prisma object as-is produces the wrong name and fails REQ-API-03 and REQ-ARCH-02 at once.
@@ -206,6 +211,32 @@ assignment says nothing comparable about achievements. Modelling them as a table
 entity the domain does not have and would then require a DataLoader to undo the N+1 that invention
 creates — the chain REQ-EVAL-01 counts against. Note this is available because the database is
 PostgreSQL, which supports array columns natively.
+
+**On the audit timestamps.** Every table carries `createdAt` and `updatedAt`. The assignment asks
+for neither, so the reason belongs here rather than in a commit message.
+
+They are the cheapest thing that makes a row's history answerable at all. This database is written
+only by migrations, and the content is frozen into the queue, so without them nothing records which
+run produced which row — a correction shipped as a later `UPDATE` would be indistinguishable from
+the original seed. Two columns buy that, and they are the columns every reviewer expects to find on
+a persisted row.
+
+They stop at the database. Neither is a GraphQL field, for the reason `sortOrder` is not one either:
+they are how a row is administered, not something the card says about me, and REQ-EVAL-01 counts
+unrequested surface against. Exposing them would have put two fields on all five types in a schema
+whose entire payload is one card — the first two fields a reviewer reads about `Profile`, ahead of
+`name` — and neither would have said anything: `updatedAt` is maintained by the Prisma client rather
+than by a database trigger, and this application never writes, so until something writes through the
+client `updatedAt` equals `createdAt` on every row and both read as "when the migration that created
+this row ran". Keeping them out of the schema also keeps a base class out of the code that would
+have existed only to share them.
+
+`updatedAt` carries `@default(now())` beside `@updatedAt`, and that default is load-bearing. Prisma
+renders `@updatedAt` alone as a NOT NULL column with no database default, because it expects the
+client to be the only writer — and here the client is not: content arrives as raw SQL in the
+migration queue, where a defaultless NOT NULL column makes every future data migration name the
+value by hand or fail on deploy. With the default in place `@updatedAt` still moves the column on
+writes through the client; it merely stops being the only thing that can supply a value.
 
 ## 4. Database initialization — `REQ-INIT-*`
 
@@ -473,6 +504,14 @@ registry does not, so that one package is transpiled on the way in and carved ou
 image; the Dockerfile copies it for that reason, since `nest build` falls back to `tsconfig.json`
 silently when it is absent and the fallback compiles them.
 
+M4 adds none, and that is a decision rather than an omission. A unit test over `ProfileService` with
+a mocked `PrismaService` would assert that the code agrees with itself — the shape this bar exists
+to refuse. An end-to-end test against a real database would be worth more, but what it asserts is
+already asserted twice: by M4's own exit criteria, which run the reference and the coverage query
+against the running stack, and by REQ-EVAL-07 at M5, which runs them again from a clean clone. The
+cost would be a second Jest project and a test run that cannot pass without a database. The bar is
+"where they earn their place", and here they do not.
+
 ## 6. Evaluation criteria — `REQ-EVAL-*`
 
 > Что оценивается:
@@ -551,12 +590,75 @@ key column on its own: without it the referential check behind `onDelete: Cascad
 table. None of this is a performance claim at this row count — a business card holds a handful of
 rows — it is the shape being right, and the constraints being real.
 
+Two columns were added at M4 and neither changes that reasoning. `Profile.isDefault` carries a
+unique index, which is the whole point of it: on a nullable column PostgreSQL admits many nulls and
+one row per distinct value, so "at most one profile marked `true`" becomes a constraint the database
+checks rather than a convention the seed observes. What the index does not rule out is a single
+`false` row beside it — the guarantee is per value, not one non-null row in total — and none is ever
+written, because null already says "not the default". The textbook form is a partial unique index —
+`... WHERE "isDefault"` — and it is rejected because Prisma cannot declare one in `schema.prisma`,
+so it would have to be raw SQL and the schema would then drift from the database it describes.
+
+`sortOrder` on `Link`, `Skill` and `Project` gets no index at all. It is read only inside an
+`ORDER BY` over a handful of rows already filtered to one profile, and an index for that would be
+exactly the performance claim the paragraph above declines to make. It carries no unique constraint
+either: the services break ties on the visible column, so duplicates still order reproducibly,
+whereas a constraint would make any future reordering fight the database mid-transaction.
+
 **On resolving the relations.** Each of the profile's four relations — `links`, `skills`,
 `experience`, `projects` — is a `@ResolveField`, not a single `findUnique` with `include`. Neither
 shape produces an N+1, so that is not what decides it; over-fetching is. An `include` loads all four
 relations on every request, including the reference query in [ASSIGNMENT.md](./ASSIGNMENT.md), which
 asks for none of the links and none of the achievements. Field resolvers load exactly what the
 selection set names, which is what «работа GraphQL с вложенными данными» is asking after.
+
+**On the GraphQL layer (REQ-API-01, REQ-STACK-06).** Code-first, through `@nestjs/graphql` and the
+Apollo driver, in one `AppGraphQLModule` that registers the endpoint and one `ProfileModule` that
+holds the domain. `ProfileService` is the whole of the business logic — which row is the profile,
+and in what order each collection comes back — and the resolver holds no `where`, no `orderBy` and
+no Prisma type. Four decisions in that layer are not defaults.
+
+The versions are pinned a major behind. `@nestjs/graphql@14` and `@nestjs/apollo@14` require
+`@nestjs/core ^12`, and this application is on 11.2.3, so both stay on `13.4.5`; upgrading NestJS to
+reach the newer line would put every existing module at risk for a milestone whose job is to add an
+API. `graphql` stays on `16.14.2` for a similar reason, `17` being new enough that the ecosystem
+risk buys nothing here. A fifth package, `@as-integrations/express5`, is declared an *optional* peer
+of `@nestjs/apollo` and is not optional: this project runs Express 5, and `GraphQLModule` refuses to
+start without it — after the routes are mapped, so the container comes up and then goes unhealthy
+with nothing wrong at build time. All five are production dependencies, because the API is what the
+runtime image serves.
+
+The generated schema is kept in memory (`autoSchemaFile: true`). Written to a file it would be build
+output committed to git — which this repository already refuses for `src/generated/` — or
+git-ignored, and then invisible to the reviewer it was meant to serve. The reviewer reads the schema
+in Sandbox, which the assignment mandates anyway.
+
+Every list is ordered explicitly, because PostgreSQL guarantees no order without one and the
+coverage query's response is quoted in the report. `Experience` sorts by `startDate desc`, which is
+what the two date columns were chosen for. The other three carry a stored `sortOrder`, numbered by a
+migration in the order the seed lists them: alphabetical was the cheaper answer and is the wrong
+one, since a skill list that opens on `Ant Design` and closes on `TypeScript` reads as unsorted on
+the one page whose whole job is to present a specialist. `sortOrder` is not exposed as a GraphQL
+field — it is how the list is ordered, not something the card says about me — and it is not called
+`position`, because `Experience.position` already means the job title.
+
+Each of the four then breaks ties on a visible column — `label`, `name`, `name` and `company` — and
+that second key is not decoration. Neither leading key is unique: `sortOrder` carries no unique
+constraint by the decision above, and two positions can genuinely begin in the same month. A tie
+under `ORDER BY` is resolved by whatever the plan happens to produce, so without the second key the
+response quoted in the report would not be reproducible, which is the one property quoting it
+depends on.
+
+A missing profile row is an error, which lets the root field be non-null. The seed guarantees the
+row, so its absence means the database was never prepared, and that should surface as an error
+rather than as `{"data": {"profile": null}}`, which reads as an empty card. It is raised as a
+`GraphQLError` carrying `extensions.code = "NOT_FOUND"`, not as Nest's `NotFoundException`: this
+application answers over a protocol with no status codes, and Apollo reports an exception it does
+not recognise as `INTERNAL_SERVER_ERROR`, with the HTTP envelope — `status: 404`, `originalError` —
+attached to the extensions, so a client would read "internal error" for the one thing that can go
+wrong here. Naming the code is one line and is not an error taxonomy: it stays the only error this
+layer defines, and a read-only schema with one root field that invented a set of them would be
+exactly the scope REQ-EVAL-01 counts against.
 
 **On DataLoader.** The assignment asks for sound handling of nested data; batching is a means, not a
 requirement, so DataLoader is not one either. This schema cannot produce an N+1, so none is
