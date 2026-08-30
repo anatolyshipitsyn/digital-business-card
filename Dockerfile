@@ -16,6 +16,13 @@ RUN apt-get update \
 
 WORKDIR /app
 
+# Every normal container start applies the committed schema and data migrations before the
+# application command, so both image targets carry one startup contract rather than two. Only the
+# declaration belongs here: ENTRYPOINT is metadata and adds no filesystem content, so it costs the
+# stages below nothing. The script itself is copied into each runnable stage instead — copied here
+# it would sit above `deps`, and editing five lines of shell would re-run `npm ci` twice.
+ENTRYPOINT ["./docker-entrypoint.sh"]
+
 # ---- deps --------------------------------------------------------------------------------------
 # Every dependency, dev included. Keyed on the manifests alone, so editing a source file does not
 # reinstall anything. Both `build` and `dev` start from here.
@@ -29,6 +36,11 @@ RUN npm ci
 FROM deps AS dev
 
 ENV NODE_ENV=development
+
+# The script the base stage's ENTRYPOINT names. Under docker-compose.yml the bind mount over /app
+# shadows this copy with the host's file, so what this line covers is a `dev` container run without
+# that mount — and the host file's exec bit, which a checkout can lose, stops being load-bearing.
+COPY --chmod=0755 docker-entrypoint.sh ./
 
 # Not `nest start --watch`: its watcher spawns the rebuilt process without killing the running one,
 # so every restart dies on EADDRINUSE and the stale process keeps serving — a change that silently
@@ -73,7 +85,7 @@ FROM base AS runtime
 
 ENV NODE_ENV=production
 
-# `prisma` remains a production dependency because the runtime entrypoint will run migrations.
+# `prisma` remains a production dependency because the entrypoint runs migrations.
 COPY package.json package-lock.json ./
 
 RUN npm ci --omit=dev \
@@ -82,7 +94,7 @@ RUN npm ci --omit=dev \
 
 COPY --from=build /app/dist ./dist
 
-# What the Prisma CLI needs in this image. The entrypoint runs `migrate deploy` from M3 on, and on
+# What the Prisma CLI needs in this image. The entrypoint runs `migrate deploy`, and on
 # Prisma 7 the connection string is no longer allowed inside schema.prisma: the schema declares the
 # provider and nothing else, and the CLI reads the URL from prisma.config.ts.
 COPY prisma.config.ts ./
@@ -100,13 +112,17 @@ COPY src/config/namespaces/database-url.ts src/config/namespaces/port.ts ./src/c
 # was supposed to prepare the database.
 RUN ./node_modules/.bin/prisma validate > /dev/null
 
+# The script the base stage's ENTRYPOINT names, copied last so that editing it rebuilds this layer
+# and nothing above it. `--chmod` rather than a `RUN chmod`: one layer, and the mode does not depend
+# on what the build context happened to carry.
+COPY --chmod=0755 docker-entrypoint.sh ./
+
 USER node
 
 # Exec form on purpose: node becomes PID 1 and Docker signals it directly, which is what makes
 # `enableShutdownHooks()` in src/main.ts reachable. A shell form would leave sh holding PID 1.
 #
-# What M3 still adds to this stage: the entrypoint that runs `prisma migrate deploy` before exec'ing
-# the application, the prune of the query compilers for the four databases this project never uses,
-# and the removal of npm/npx/yarn. The schema, the migrations and the config the CLI needs are
-# already here — see "On filling the database" in docs/requirements/REQUIREMENTS.md.
+# The entrypoint inherited from the base stage runs `prisma migrate deploy` before this application
+# command. The schema, the migrations and the config the CLI needs are already here — see "On
+# filling the database" in docs/requirements/REQUIREMENTS.md.
 CMD ["node", "dist/main.js"]
