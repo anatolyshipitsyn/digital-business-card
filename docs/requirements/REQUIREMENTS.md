@@ -236,9 +236,11 @@ command. `set -e`, because a shell that ignores a non-zero exit starts the appli
 schema that was never prepared: the container then looks healthy, Sandbox loads — the GraphQL schema
 is built from code, not from the database — and only the query fails, with a Prisma error about a
 missing table. That points a reviewer at the application instead of at startup, which is the most
-expensive kind of failure to diagnose. And `exec node dist/main.js`, so the process becomes PID 1 and
-receives `SIGTERM` directly; without it the shell holds PID 1, does not forward the signal, and every
-restart waits out the ten-second kill timeout.
+expensive kind of failure to diagnose. And `exec "$@"`, so the process becomes PID 1 and receives
+`SIGTERM` directly; without it the shell holds PID 1, does not forward the signal, and every restart
+waits out the ten-second kill timeout. The command is passed through rather than named, so one
+script serves both image targets: it execs `node dist/main.js` under `runtime` and the watch loop
+under `dev`, and neither stage can acquire a startup contract the other does not have.
 
 A migration that fails is recorded as failed in `_prisma_migrations`, and the next `migrate deploy`
 refuses to continue until it is resolved. That is the wanted behaviour — the failure is loud and
@@ -701,7 +703,7 @@ in the same order. One heading per requirement group, one section per requiremen
 
 > При запуске приложения база данных должна быть автоматически подготовлена и заполнена Вашими данными.
 
-**Implementation:** `docker-entrypoint.sh:12` runs `prisma migrate deploy` before `node dist/main.js`.
+**Implementation:** `docker-entrypoint.sh:4` runs `prisma migrate deploy` before the image's `CMD`.
 **Evidence:** `docker compose up --build` on a pruned volume — log excerpt showing the migration applied.
 ```
 
