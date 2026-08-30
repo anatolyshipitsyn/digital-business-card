@@ -28,15 +28,34 @@ datasource db {
 
 /// The card itself. The API exposes exactly one, reached by the root `profile` query.
 ///
-/// That row is addressed by its id, which is the fixed unique key REQ-API-03 asks the resolver to
-/// read — the seed writes a slug there rather than a generated value, so the root query is a
-/// `findUnique` on a known key and never "whichever row comes back first". No second slug column:
-/// the id already is one.
+/// That row is addressed by `isDefault`, which is the fixed unique key REQ-API-03 asks the resolver
+/// to read. The column is nullable and `@unique`: PostgreSQL treats nulls as distinct in a unique
+/// index, so every other row can hold null while at most one holds `true` — the database is what
+/// enforces the invariant, and the root query is a `findUnique` rather than "whichever row comes
+/// back first".
 model Profile {
-  id          String @id
+  id          String   @id
+  /// True on the one profile the API serves; null on any other row. The unique index leaves one
+  /// slot per distinct value, so what it enforces is "at most one `true`" — which is the whole of
+  /// what the root query needs. It would admit a single `false` beside that row; none is ever
+  /// written, because null already says "not the default".
+  isDefault   Boolean? @unique
   name        String
   /// The «краткое описание» of the assignment: a paragraph, not a headline.
   description String
+
+  /// Audit metadata, on every table — and on none of the GraphQL types, for the reason `sortOrder`
+  /// is on none of them either. `updatedAt` is maintained by the Prisma client rather than by the
+  /// database, so it moves only on a write through the client, of which this application makes
+  /// none: the API is read-only and rows arrive through migrations. Both therefore read as "when
+  /// the migration that created this row ran", which is what they honestly are.
+  ///
+  /// `@default(now())` on `updatedAt` is load-bearing rather than decorative. The column is NOT
+  /// NULL and Prisma renders `@updatedAt` alone with no database default, which would make every
+  /// future data migration name it by hand in raw SQL or fail on deploy. See "On the audit
+  /// timestamps" in docs/requirements/REQUIREMENTS.md.
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   links      Link[]
   skills     Skill[]
@@ -44,11 +63,30 @@ model Profile {
   projects   Project[]
 }
 
+// Three of the four collections carry `sortOrder`. They have no natural order and PostgreSQL
+// guarantees none without an ORDER BY, so the curated order the seed expresses is stored rather
+// than reconstructed — alphabetical would open the skill list on Ant Design and close it on
+// TypeScript, which reads as unsorted on the one page whose job is to present a specialist.
+// `Experience` needs none of this: it is ordered by startDate.
+//
+// Not named `position`: that word already means the job title on Experience. The default is a
+// per-table sequence, so a row inserted without one lands after everything already numbered and
+// nobody has to compute the next value by hand. No unique constraint: the services break ties on
+// the visible column, so duplicates still order reproducibly. And no index of its own: it is read
+// only inside an ORDER BY over a handful of rows already filtered to one profile, which is not a
+// performance claim this schema makes — see "On the indexes" in docs/requirements/REQUIREMENTS.md.
+
 /// A professional resource: GitHub, LinkedIn or another. `label` is what the client renders.
 model Link {
-  id    String @id
-  label String
-  url   String
+  id        String @id
+  label     String
+  url       String
+  /// Where this row sits in the list the API returns; see the note above.
+  sortOrder Int    @default(autoincrement())
+
+  /// Audit metadata; see the note on Profile.
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   profileId String
   profile   Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
@@ -62,8 +100,14 @@ model Link {
 
 /// One entry of «Список навыков».
 model Skill {
-  id   String @id
-  name String
+  id        String @id
+  name      String
+  /// Where this row sits in the list the API returns; see the note above Link.
+  sortOrder Int    @default(autoincrement())
+
+  /// Audit metadata; see the note on Profile.
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   profileId String
   profile   Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
@@ -88,6 +132,10 @@ model Experience {
   /// the N+1 it created. A PostgreSQL array column is what makes that choice available.
   achievements String[]
 
+  /// Audit metadata; see the note on Profile.
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
   profileId String
   profile   Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
 
@@ -99,9 +147,15 @@ model Experience {
 
 /// One project: what it is called, and where it can be seen.
 model Project {
-  id   String @id
-  name String
-  url  String
+  id        String @id
+  name      String
+  url       String
+  /// Where this row sits in the list the API returns; see the note above Link.
+  sortOrder Int    @default(autoincrement())
+
+  /// Audit metadata; see the note on Profile.
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   profileId String
   profile   Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
