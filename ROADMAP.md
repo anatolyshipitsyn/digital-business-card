@@ -93,15 +93,15 @@ one eager query shape.
 
 **Exit criteria**
 
-- [ ] `REQ-API-03` verifies — the reference query from `ASSIGNMENT.md`, pasted unchanged
-- [ ] `REQ-DATA-01`–`REQ-DATA-10` verify — the coverage query from `REQUIREMENTS.md` returns
+- [x] `REQ-API-03` verifies — the reference query from `ASSIGNMENT.md`, pasted unchanged
+- [x] `REQ-DATA-01`–`REQ-DATA-10` verify — the coverage query from `REQUIREMENTS.md` returns
       data at every path, including `links`, `startDate`/`endDate` and `achievements`, which the
       reference query never selects
-- [ ] `REQ-API-01` and `REQ-API-02` verify against the local endpoint; the production-mode half of
+- [x] `REQ-API-01` and `REQ-API-02` verify against the local endpoint; the production-mode half of
       `REQ-API-01` repeats at M5, where the image exists
-- [ ] `REQ-ARCH-02` verifies
-- [ ] `REQ-EVAL-03` verifies
-- [ ] `REQ-EVAL-06` verifies
+- [x] `REQ-ARCH-02` verifies
+- [x] `REQ-EVAL-03` verifies
+- [x] `REQ-EVAL-06` verifies
 
 ## M5 — It works from scratch
 
