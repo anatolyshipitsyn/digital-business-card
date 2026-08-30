@@ -62,17 +62,28 @@ projects — written into a data migration that runs in the same queue as the sc
 Collecting the content belongs here: it must be complete before the migration is authored, because
 authoring it is what commits the content to the queue.
 
-The requirements this milestone exists for, `REQ-INIT-01` and `REQ-INIT-02`, are not verified here.
-Both are about application startup, and there is no application image before M5; running the CLI by
-hand is the manual step they rule out. What M3 owns is that the migration is correct when startup
-later runs it.
+The entrypoint lands here too, for the reason the image landed at M1: the mechanism is already
+settled — *On preparing the schema* and *On filling the database* in `REQUIREMENTS.md` commit to
+`prisma migrate deploy` and to the seed being a migration — so once the queue holds the content, the
+shortest way to exercise it is the command that will run it in production. Writing the script later
+would mean checking the seed through `docker compose run` here and then checking it again through a
+different code path at M5.
+
+The requirements this milestone exists for, `REQ-INIT-01` and `REQ-INIT-02`, are still not verified
+here. Both are claims about a start from nothing, evidenced by a log excerpt from a clean clone and
+an unused volume, and capturing that evidence is what M5 is for; produced a milestone early it would
+be reproduced there rather than cited. What M3 owns is that the migration is correct and that
+startup runs it.
 
 **Exit criteria**
 
-- [ ] `prisma migrate deploy` applies the seed on a fresh database
-- [ ] A second run reports no pending migrations and leaves the data unduplicated
-- [ ] Every column the model defines holds real content, with no placeholder text. That it is
+- [x] `prisma migrate deploy` applies the seed on a fresh database
+- [x] A second run reports no pending migrations and leaves the data unduplicated
+- [x] Every column the model defines holds real content, with no placeholder text. That it is
       also *retrievable* is proven by the coverage query at M4, not here
+- [x] The entrypoint applies the queue before the application command, in both image targets, so a
+      start needs no migration step of its own. That it holds *from nothing*, and what an
+      unreachable database does to it, are `REQ-INIT-01` and `REQ-INIT-02` at M5
 
 ## M4 — The GraphQL API
 
@@ -94,14 +105,14 @@ one eager query shape.
 
 ## M5 — It works from scratch
 
-The packaging itself — the image, and the `app` service beside the database in the same Compose
-file — landed early, at M1, when running the Prisma CLI through the application image removed the
-need for a container of its own. What M5 owns is proving it: that a machine holding no prior state
-starts the whole thing with one command. The entrypoint and the runtime image carry failures that
-appear nowhere else: an unprepared schema, a signal that never reaches the
-process, a CLI absent from the production dependency set. So this milestone proves the packaging,
-not only the behaviour. What is measured here is what the compliance report quotes, so evidence is
-captured as it is produced rather than reconstructed at M6.
+The packaging itself landed early and in two pieces: the image and the `app` service beside the
+database in the same Compose file at M1, when running the Prisma CLI through the application image
+removed the need for a container of its own, and the entrypoint at M3, beside the queue it applies.
+What M5 owns is proving it: that a machine holding no prior state starts the whole thing with one
+command. The entrypoint and the runtime image carry failures that appear nowhere else: an unprepared
+schema, a signal that never reaches the process, a CLI absent from the production dependency set. So
+this milestone proves the packaging, not only the behaviour. What is measured here is what the
+compliance report quotes, so evidence is captured as it is produced rather than reconstructed at M6.
 
 **Exit criteria**
 
