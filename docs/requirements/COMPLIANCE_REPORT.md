@@ -13,7 +13,7 @@ Three runs are cited throughout:
 
 - **Run A** — the development stack, the command the README gives a reviewer: `docker compose up --build`.
 - **Run B** — the same clone under the production overlay: `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build --wait`, with `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB` supplied. The password held `@ : / # ?` on purpose.
-- **Run C** — the deployed instance: the `deploy` workflow's run on the self-hosted runner from `staging` at `a1a4ba7`, and the requests made to the public address afterwards. This is the one run that is not the clean clone above. Only REQ-DELIV-01 and REQ-DELIV-02 cite it.
+- **Run C** — the deployed instance: the `deploy` workflow's run on the self-hosted runner from `staging` at `a1a4ba7`, and the requests made to the public address afterwards. This is the one run that is not the clean clone above. Only REQ-DELIV-01 and REQ-DELIV-02 cite it. `a1a4ba7` is the SHA the workflow ran against on `staging`; the same commit is `c31a17d` on `main`, which the pull request rebased onto it.
 
 ---
 
@@ -30,9 +30,10 @@ Three runs are cited throughout:
 
 ```
 $ git log --oneline
-a1a4ba7 docs: record the M6 decisions
-25afbd7 docs: give the README its start command and its links
-48da864 ci: deploy to the host from a self-hosted runner
+7021aff docs: report compliance for every requirement
+c31a17d docs: record the M6 decisions
+9b3dcbe docs: give the README its start command and its links
+8bc82c5 ci: deploy to the host from a self-hosted runner
 15d4e8a docs: close M5
 7316b5f docs: record the M5 decisions
 f7f38e5 refactor: stop exporting the validation schema
@@ -58,10 +59,9 @@ b052a32 docs: record the assignment and derive numbered requirements
 c4f3710 Initial commit
 ```
 
-26 commits, read at `a1a4ba7` — the commit this report was written against. The commits that add
-the report itself follow it and are not in the excerpt above; the requirement is about how the
-history is kept, not about its length on any given day. The checkpoint-style messages it rules out
-are absent:
+27 commits, read on `main` at `7021aff` — the commit that added this report. The commit that updates
+it follows and is not in the excerpt above; the requirement is about how the history is kept, not
+about its length on any given day. The checkpoint-style messages it rules out are absent:
 
 ```
 $ git log --oneline | grep -icE "^[0-9a-f]+ (wip|fix|update)$"
@@ -947,7 +947,9 @@ is the `PUBLIC_URL` variable of the repository's `Staging` environment; Cloudfla
 `http://localhost:3000` on the host. The trigger is a push to `staging`, so the workflow is read from
 the branch that was pushed and nothing here waits on the default branch.
 
-**Evidence:** pushing `a1a4ba7` to `staging` ran the workflow to success — Run C.
+**Evidence:** pushing `a1a4ba7` to `staging` ran the workflow to success — Run C. That SHA is the
+commit as it stood on `staging`; the pull request rebased it onto `main` as `c31a17d`, so the run
+page names a commit that `main`'s history spells differently. The tree is the same one.
 
 ```
 $ gh run list --workflow deploy.yml --branch staging --limit 1 \
@@ -1020,25 +1022,50 @@ $ su - runner -c "DOCKER_HOST=ssh://nuc@nuc docker version --format 'server {{.S
 server 29.6.0 on linux/amd64
 ```
 
-### REQ-DELIV-02 — ⚠️ Partially met
+### REQ-DELIV-02 — ✅ Met
 
 > ## Просим предоставить:
 >
 > 2. Ссылку на Git (для ознакомления с исходным кодом).
 
-**Implementation:** the repository is at
-`https://github.com/anatolyshipitsyn/digital-business-card`. `README.md` now opens with what the
-project is, gives one start command, and lists the deployed Sandbox beside the local one.
+**The link:** https://github.com/anatolyshipitsyn/digital-business-card
 
-**Evidence:** no placeholder survives in the README — the check this requirement fails on:
+**Implementation:** `README.md` opens with what the project is, gives one start command, and lists
+the deployed Sandbox beside the local one. It is on `main`, the default branch a reviewer lands on.
+
+**Evidence:** read the way the requirement asks — as the reviewer sees it, from a session that is not
+logged in. The requests below carry no credentials; the repository answers them because it is public.
 
 ```
-$ grep -nE "Pending|not implemented yet|TODO|TBD" README.md; echo "exit=$?"
+$ curl -sS -m 20 -o /dev/null -w 'repo page (no auth): HTTP %{http_code}\n' \
+    https://github.com/anatolyshipitsyn/digital-business-card
+repo page (no auth): HTTP 200
+```
+
+The check this requirement fails on is a placeholder surviving anywhere in the README. On `main`,
+none does:
+
+```
+$ curl -sS https://raw.githubusercontent.com/anatolyshipitsyn/digital-business-card/main/README.md \
+    -o main-readme.md -w 'raw README on main: HTTP %{http_code}, %{size_download} bytes\n'
+raw README on main: HTTP 200, 1095 bytes
+
+$ grep -nE "Pending|not implemented yet|TODO|TBD" main-readme.md; echo "exit=$?"
 exit=1
 ```
 
+and it reads as the requirement describes:
+
 ```
-$ sed -n '9,21p' README.md
+$ sed -n '1,20p' main-readme.md
+# Digital Business Card
+
+A backend that presents me as a specialist: a GraphQL API over NestJS and Prisma, browsable in
+Apollo Sandbox. Ask it for my profile and it returns the profile together with my skills, work
+experience and projects.
+
+Built with TypeScript, NestJS, Prisma, GraphQL, PostgreSQL and Docker.
+
 ## Running it
 
 ​```bash
@@ -1051,14 +1078,9 @@ docker compose up --build
 - Local: http://localhost:3000/graphql
 
 Paste a query into Sandbox and run it — the profile, skills, work experience and projects come back
-in one response.
 ```
 
-**Why not `✅`:** this requirement is read as the reviewer sees it, from a session that is not logged
-in, on the repository's default branch. The README above is committed on `staging` and has not been
-merged, so `main` — the branch a reviewer lands on — still carries the `Pending` blocks this section
-shows removed. The deployed link the README carries does answer; that half is closed under
-REQ-DELIV-01. What is left is the merge.
+The Sandbox link it carries is REQ-DELIV-01's, and answers.
 
 ---
 
@@ -1066,17 +1088,13 @@ REQ-DELIV-01. What is left is the merge.
 
 | Total | ✅ Met | ⚠️ Partially met | ❌ Not met | Withdrawn |
 | ---: | ---: | ---: | ---: | ---: |
-| 34 | 31 | 2 | 0 | 1 |
+| 34 | 32 | 1 | 0 | 1 |
 
 Withdrawn IDs are counted in the total and in their own column.
 
-**The two that are not `✅`, and what closes each:**
+**The one that is not `✅`, and what closes it:**
 
 - **REQ-API-02** `⚠️` — run the reference query inside Sandbox in a browser whose network can reach
-  Apollo's CDN, and capture the session. Everything it asserts is already evidenced over HTTP; what
-  is missing is the browser.
-- **REQ-DELIV-02** `⚠️` — merge `staging` into `main`, the branch a reviewer reads. The deployed link
-  it carries already answers.
-
-Neither blocks the other, and neither is a defect in the application: one is a browser that could not
-reach Apollo's CDN, the other a merge.
+  Apollo's CDN, and capture the session. Everything it asserts is already evidenced over HTTP: the
+  endpoint serves the Sandbox bundle (REQ-API-01) and answers the query (REQ-API-03), locally and at
+  the deployed address. What is missing is the browser, not anything in the application.

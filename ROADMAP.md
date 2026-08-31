@@ -134,9 +134,9 @@ A running instance a reviewer can open, and a repository they can read.
 
 - [x] `REQ-DELIV-01` verifies — the push to `staging` ran the deploy, and the public address serves
       Sandbox and answers the reference query
-- [ ] `REQ-DELIV-02` verifies, from a session that is not logged in — the README no longer carries a
-      `Pending` block, but it is read on the default branch and this change is not merged there yet
-- [ ] `REQ-STACK-01` verifies, read after the final commit
+- [x] `REQ-DELIV-02` verifies, from a session that is not logged in — the README on `main` carries no
+      `Pending` block
+- [x] `REQ-STACK-01` verifies, read after the final commit
 - [x] `REQ-ARCH-01` verifies
 - [x] `docs/requirements/COMPLIANCE_REPORT.md` follows the *Report format* section of
       `REQUIREMENTS.md` and covers every requirement ID, withdrawn ones included
