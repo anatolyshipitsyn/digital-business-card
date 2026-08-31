@@ -132,9 +132,11 @@ A running instance a reviewer can open, and a repository they can read.
 
 **Exit criteria**
 
-- [ ] `REQ-DELIV-01` verifies
-- [ ] `REQ-DELIV-02` verifies, from a session that is not logged in
+- [ ] `REQ-DELIV-01` verifies — the runner and the tunnel route are both in place; what is left is
+      the deploy itself, which runs on a push to `staging`
+- [ ] `REQ-DELIV-02` verifies, from a session that is not logged in — the README no longer carries a
+      `Pending` block, but it is read on the default branch and this change is not committed yet
 - [ ] `REQ-STACK-01` verifies, read after the final commit
-- [ ] `REQ-ARCH-01` verifies
+- [x] `REQ-ARCH-01` verifies
 - [ ] `docs/requirements/COMPLIANCE_REPORT.md` follows the *Report format* section of
       `REQUIREMENTS.md` and covers every requirement ID, withdrawn ones included
