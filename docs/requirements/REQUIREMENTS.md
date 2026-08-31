@@ -280,6 +280,15 @@ repeatable rather than intermittent — and since the seed is a migration too, i
 of racing; the flip side is that a slow migration blocks every replica's startup and can outlast a
 platform health check.
 
+**How the negative case is staged.** REQ-INIT-01's second half is run against the runtime image,
+from the overlay's own stack: `run --rm --no-deps -e POSTGRES_PORT=5433 app`. The port is chosen
+because nothing listens on it, so the connection is refused immediately, where an unroutable address
+would only time out and make the check's duration a property of the network. `--no-deps` is what
+stops Compose from starting `db` and satisfying the dependency the check exists to remove. Three
+things are the evidence together: a non-zero exit status, Prisma's `P1001`, and the absence of any
+Nest bootstrap line in the output — the last is what separates a container that never started from
+one that started and could not answer.
+
 **On waiting for the database.** `set -e` protects the application only once the database is
 reachable; before that it is what turns a routine startup race into a failed run. On a clean volume
 Postgres spends the first seconds in `initdb` while the application container starts immediately, so
@@ -714,10 +723,13 @@ source mount, no watch command, the loopback binding — and defines no service 
 
 That ordering costs something and the cost is stated rather than hidden: `docker compose up --build`
 on a clean clone brings up the development environment, not the image that answers at
-REQ-DELIV-01's URL, so REQ-EVAL-07 is evidenced with the overlay in place — one extra `-f`. The
-README carries both commands from M6, where it stops being a placeholder. The two starts share the
-database, the network, the port and the health checks; what differs is which stage of the same
-Dockerfile the application comes from.
+REQ-DELIV-01's URL. So REQ-EVAL-07 is evidenced twice rather than once — by the bare command, which
+is what the requirement's own verification wording names, and by the same
+clone under the overlay, one extra `-f`, which is the image that gets deployed. Neither run
+substitutes for the other: the bare command never starts the runtime stage, and the overlay never
+starts at all until the three variables exist. The README carries both commands from M6, where it
+stops being a placeholder. The two starts share the database, the network, the port and the health checks; what
+differs is which stage of the same Dockerfile the application comes from.
 
 Beyond that stage, the overlay carries two differences.
 
@@ -744,6 +756,10 @@ the production password is no longer constrained to letters and digits. The host
 and it is checked rather than escaped: escaping it would encode the dots between its labels, so it
 is admitted as a hostname or a bracketed IP literal and refused if it carries a port, credentials
 or a path — see *On reading the environment* for what an unchecked one did.
+
+That path is walked once before any deploy, and the artifact is kept: the from-scratch run under the
+overlay exports a password holding `@`, `:`, `/`, `#` and `?`, so the encoding is evidenced rather
+than argued. Local development cannot evidence it — there the password is always `card`.
 
 `POSTGRES_HOST` and `POSTGRES_PORT`, defaulted to the compose service and `5432`, are what an
 explicit `DATABASE_URL` used to be — the escape hatch for a database that is not this one. They are
