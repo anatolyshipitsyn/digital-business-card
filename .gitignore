@@ -29,6 +29,11 @@ yarn-error.log*
 # REQ-EVAL-01 counts against.
 docs/superpowers/
 
+# Rendered architecture diagrams from the archify skill. They are generated from the code on
+# demand and reproduced by re-running it, so they are scaffolding rather than a deliverable:
+# 1.4 MB of generated HTML in the diff is exactly the unrequested scope REQ-EVAL-01 counts against.
+.archify/
+
 # Editors and OS
 .DS_Store
 .idea/
