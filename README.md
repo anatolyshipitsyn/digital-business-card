@@ -8,13 +8,17 @@ Built with TypeScript, NestJS, Prisma, GraphQL, PostgreSQL and Docker.
 
 ## Running it
 
-> **Pending — not implemented yet.** This section must end up as a single command and nothing else.
-> REQ-DELIV-02 is not met while this note is still here.
+```bash
+docker compose up --build
+```
 
 ## GraphQL Sandbox
 
-> **Pending — not implemented yet.** This section must end up as the deployed Sandbox URL and the
-> local one. REQ-DELIV-01 and REQ-DELIV-02 are not met while this note is still here.
+- Deployed: https://card-stg.shipicin.ru/graphql
+- Local: http://localhost:3000/graphql
+
+Paste a query into Sandbox and run it — the profile, skills, work experience and projects come back
+in one response.
 
 ## What was built, and why
 
