@@ -711,9 +711,16 @@ is a single profile, and the parameters it would carry are that profile's own da
 | REQ-DELIV-01 | A link to the project, for viewing | Read as a running instance, since REQ-DELIV-02 already covers the source: open the URL from a clean browser session; Sandbox loads and the REQ-API-03 query returns data |
 | REQ-DELIV-02 | A link to the Git repository with the source | Open the repo URL as the reviewer sees it: the README opens with what the project is, one start command and the Sandbox link, and carries no unfinished placeholder — a `Pending` block anywhere in it means this is not met |
 
-**On the deployment target.** The host is a VPS that already terminates TLS behind a reverse proxy,
-with the application on a subdomain. That settles the shape: `docker compose` is not the local
-convenience here, it *is* the deployment, and Postgres runs in it rather than as a managed service.
+**On the deployment target.** The host is a machine that already runs other work — a Proxmox box
+with a single-node Docker Swarm serving a neighbouring project — and it terminates TLS with a
+Cloudflare tunnel rather than a reverse proxy of its own: nothing listens on 80 or 443, and
+`cloudflared` runs with a token, so the tunnel's ingress lives in the Cloudflare dashboard instead
+of a file. What that changes for this project is nothing in the Compose files: the tunnel runs
+beside the application and reaches it at `127.0.0.1:3000`, which is the address the overlay already
+binds. Publishing the application is adding a public hostname there, not a change here.
+
+That settles the shape: `docker compose` is not the local convenience here, it *is* the deployment,
+and Postgres runs in it rather than as a managed service.
 
 It is one base `docker-compose.yml` plus `docker-compose.prod.yml` over it. The base file is the
 local development environment: the `app` service builds the Dockerfile's `dev` stage and runs the
@@ -769,7 +776,7 @@ overlay cannot delete a service the base file declares, so a database outside th
 removing that service and its `depends_on` from the files, not setting two variables. The variables
 are what make the application portable; the compose topology is a separate edit.
 
-The second is the address the app's port publishes on: `127.0.0.1` on the VPS so that only the proxy
+The second is the address the app's port publishes on: `127.0.0.1` on the host so that only the tunnel
 can reach it, `0.0.0.0` locally so that `docker compose up` answers on the host. Compose appends
 port mappings across files rather than replacing them, so the overlay tags the list `!override`;
 the bind mount is cleared with `!reset` for the same reason, since a merged mount would otherwise
@@ -799,15 +806,31 @@ Three consequences follow, and they are the reason this is not a last step.
   REQ-DELIV-01; *On filling the database* cancels it — recovery is `docker compose down -v` followed
   by a start. This is the decision paying for itself a second time.
 - **The uptime is ours.** No platform sleeps the instance, and no free tier expires the database —
-  the two failure modes that would have killed the README link silently. In exchange the VPS itself
+  the two failure modes that would have killed the README link silently. In exchange the host itself
   is now the single point of failure, so both services carry `restart: unless-stopped` and Docker is
   enabled at boot. That policy composes with the entrypoint rather than contradicting it: an
   unreachable database still exits non-zero, exactly as REQ-INIT-01 requires, and the restart policy
   only decides what happens next — a database slow to come back heals without a visit.
 
-`PORT` and the `POSTGRES_*` variables still come from the environment. Nothing about a VPS requires
-it, but a container that reads its port and its database credentials from the outside is the one that
-stays portable, and the cost is zero.
+`PORT` and the `POSTGRES_*` variables still come from the environment. Nothing about this host
+requires it, but a container that reads its port and its database credentials from the outside is the
+one that stays portable, and the cost is zero.
+
+**On how the deploy runs.** A workflow on a self-hosted runner beside the host, triggered by a push
+to `staging`. What is deployed is the Staging environment, so `staging` is the branch that names it
+and `main` deploys nothing; a push trigger reads the workflow from the branch that was pushed, so a
+deploy never waits on the default branch. The manual trigger is declared beside it, but GitHub only
+offers a manual run for a workflow that also exists on the default branch, so it stays absent until
+this file is merged to `main`. The runner's Docker daemon is not the host's, so the job selects a Docker
+context pointing at the host over SSH and runs both the build and the start against it — the image
+is built on the daemon that runs it and never leaves it. No registry: the neighbouring project needs
+one because Swarm pulls several images by digest, and neither reason applies to one Compose service.
+
+The job runs no migration step. The entrypoint owns the queue in both image targets, and a second
+`prisma migrate deploy` in the workflow would put one command in two places. What the job does
+instead is assert: it reads the startup log and fails unless it carries either the applied-migrations
+line or `No pending migrations to apply`. Deploys queue rather than cancel, because an interrupted
+migration is recorded as failed in `_prisma_migrations` and blocks every later start.
 
 ---
 
@@ -835,6 +858,9 @@ Rules for the report:
 - A withdrawn ID keeps its section and says why it was withdrawn — never silently disappears.
 - **Evidence** is a real artifact: a command that was actually run with its output, a `file:line`
   reference, or a GraphQL response. Never a claim without one.
+- Evidence is carried inline, in the entry it belongs to. An earlier revision of this document kept
+  it in a separate transcript; that file was removed before delivery, and the report is now the only
+  place an artifact is recorded.
 - A requirement with no evidence is `⚠️` or `❌`, never `✅`.
 - Where the assignment states the same thing twice — once as a requirement, once as a criterion —
   the second entry keeps its own quote but replaces the evidence block with a `**Covered by:**` line
