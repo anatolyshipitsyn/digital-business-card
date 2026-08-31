@@ -1,0 +1,104 @@
+# CD: deploys this project to the host on a push to staging.
+#
+# The deployed instance is the Staging environment, so `staging` is the branch that describes it and
+# `main` stays a branch nothing deploys from. A push trigger reads the workflow from the branch that
+# was pushed, so this file never has to reach the default branch for a deploy to run. The
+# workflow_dispatch trigger below is the one exception: GitHub only offers a manual run for a
+# workflow that also exists on the default branch, so until this file is merged to main, the button
+# is absent and a push to `staging` is the way in.
+#
+# Topology, measured rather than assumed. The self-hosted runner's Docker daemon is not the host's:
+# the host carries no runner unit, no runner directory and no runner container. So this job selects
+# a Docker context pointing at the host over SSH and runs both the build and the start against it —
+# the image is built on the daemon that will run it and never leaves that daemon.
+#
+# No registry is involved. The neighbouring project on this machine needs one because Swarm pulls
+# five images by digest; neither reason applies to a single Compose service and one target daemon.
+#
+# There is no migration step. The image entrypoint runs `prisma migrate deploy` before the
+# application command, in both image targets — see "On preparing the schema" in
+# docs/requirements/REQUIREMENTS.md. Running it again here would put one command in two places and
+# leave a reader asking which is authoritative. What this job does instead is assert it happened.
+#
+# TLS is terminated by a Cloudflare tunnel running on the same host, which reaches the application
+# at 127.0.0.1:3000 — the address docker-compose.prod.yml already binds. Publishing a hostname is a
+# Cloudflare dashboard action, not a change in this repository.
+
+name: deploy
+
+on:
+  push:
+    branches: [staging]
+    # A documentation merge redeploys nothing and would only hold the runner.
+    paths-ignore:
+      - 'docs/**'
+      - 'README.md'
+  workflow_dispatch:
+
+# Deploys queue rather than cancel. An interrupted `migrate deploy` is recorded as failed in
+# _prisma_migrations and blocks every later start until a human resolves it.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  CONTEXT: card-nuc
+  # The login is spelled out because the runner runs as `runner` and the host account is `nuc`;
+  # a bare ssh://nuc would connect as runner@nuc and be refused. The runner's key is authorized
+  # for nuc@nuc, so no agent, no secret and no ~/.ssh/config on the runner is involved.
+  HOST_DAEMON: ssh://nuc@nuc
+  COMPOSE: -f docker-compose.yml -f docker-compose.prod.yml
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, nuc]
+    environment: Staging
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select the host's Docker daemon
+        run: |
+          docker context create "$CONTEXT" --docker "host=$HOST_DAEMON" \
+            || docker context update "$CONTEXT" --docker "host=$HOST_DAEMON"
+          docker context use "$CONTEXT"
+          docker version --format 'server {{.Server.Version}} on {{.Server.Os}}/{{.Server.Arch}}'
+
+      - name: Build and start
+        env:
+          POSTGRES_USER: ${{ vars.POSTGRES_USER }}
+          POSTGRES_DB: ${{ vars.POSTGRES_DB }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        run: docker compose $COMPOSE up -d --build --wait
+
+      - name: Assert the entrypoint applied the migration queue
+        env:
+          POSTGRES_USER: ${{ vars.POSTGRES_USER }}
+          POSTGRES_DB: ${{ vars.POSTGRES_DB }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        run: |
+          log=$(docker compose $COMPOSE logs app)
+          if ! printf '%s\n' "$log" | grep -qE "No pending migrations to apply|migration\(s\) have been applied|Applying migration"; then
+            printf '%s\n' "$log" | tail -40
+            echo "::error::the entrypoint left no migration line in the startup log"
+            exit 1
+          fi
+          printf '%s\n' "$log" | grep -E "No pending migrations to apply|migration\(s\) have been applied|Applying migration"
+
+      - name: Readiness, from inside the container
+        env:
+          POSTGRES_USER: ${{ vars.POSTGRES_USER }}
+          POSTGRES_DB: ${{ vars.POSTGRES_DB }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        run: |
+          docker compose $COMPOSE exec -T app node -e '
+            fetch("http://127.0.0.1:3000/health/readiness")
+              .then(r => { console.log("readiness", r.status); process.exit(r.ok ? 0 : 1) },
+                    e => { console.error(e.message); process.exit(1) })'
+
+      - name: The reference query, through the public URL
+        run: |
+          curl -sS --fail-with-body "${{ vars.PUBLIC_URL }}" \
+            -H 'content-type: application/json' \
+            --data '{"query":"query { profile { name description skills { name } experience { company position } projects { name } } }"}' \
+            | tee /dev/stderr | grep -q '"name"'
