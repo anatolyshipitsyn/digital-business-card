@@ -116,15 +116,15 @@ compliance report quotes, so evidence is captured as it is produced rather than 
 
 **Exit criteria**
 
-- [ ] `REQ-EVAL-07` verifies — including the clean clone and the coverage query, both of which
+- [x] `REQ-EVAL-07` verifies — including the clean clone and the coverage query, both of which
       `down -v` alone does not establish
-- [ ] `REQ-INIT-01` verifies, negative case included
-- [ ] `REQ-INIT-02` verifies
-- [ ] `REQ-API-01` verifies again against the containerised endpoint under `NODE_ENV=production`
-- [ ] `REQ-STACK-03` and `REQ-STACK-07` verify
-- [ ] `REQ-EVAL-01` verifies — the diff reviewed for abstractions and features nothing asked for
-- [ ] `docker compose stop app` returns promptly, showing the signal reaches the process
-- [ ] Every artifact the report will cite is saved where it can cite it
+- [x] `REQ-INIT-01` verifies, negative case included
+- [x] `REQ-INIT-02` verifies
+- [x] `REQ-API-01` verifies again against the containerised endpoint under `NODE_ENV=production`
+- [x] `REQ-STACK-03` and `REQ-STACK-07` verify
+- [x] `REQ-EVAL-01` verifies — the diff reviewed for abstractions and features nothing asked for
+- [x] `docker compose stop app` returns promptly, showing the signal reaches the process
+- [x] Every artifact the report will cite is saved where it can cite it
 
 ## M6 — Delivered
 
