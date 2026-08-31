@@ -12,7 +12,7 @@ export const configs = [commonConfig, databaseConfig];
  * `looseObject` keeps the rest of `process.env` — PATH, HOME, the dozen Docker adds — rather than
  * stripping it: what this returns is what ConfigModule goes on to treat as the environment.
  */
-export const validationSchema = z.looseObject({
+const validationSchema = z.looseObject({
   ...commonSchema,
   ...databaseSchema,
 });
