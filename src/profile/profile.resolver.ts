@@ -1,9 +1,12 @@
-import { Parent, Query, ResolveField, Resolver } from '@nestjs/graphql';
+import { Args, Parent, Query, ResolveField, Resolver } from '@nestjs/graphql';
 
+import { ZodArgsPipe } from '../graphql/zod-args.pipe';
+import { ProjectPageArgs, projectPageSchema } from './dto/project-page.args';
 import { Experience } from './models/experience.model';
 import { Link } from './models/link.model';
 import { Profile } from './models/profile.model';
 import { Project } from './models/project.model';
+import { ProjectPage } from './models/project-page.model';
 import { Skill } from './models/skill.model';
 import { ProfileService } from './profile.service';
 
@@ -52,5 +55,23 @@ export class ProfileResolver {
   @ResolveField(() => [Project])
   projects(@Parent() profile: Profile): Promise<Project[]> {
     return this.profiles.findProjects(profile.id);
+  }
+
+  /**
+   * A page of the same rows `projects` returns, beside that field rather than instead of it.
+   *
+   * `projects` is fixed by the reference query in docs/requirements/ASSIGNMENT.md, which selects
+   * `name` directly on it, so it cannot become an envelope without failing REQ-API-03 on the first
+   * selection inside it. The redundancy is deliberate and is the cheaper half of the trade.
+   *
+   * The bounds are applied here and not in the service: a range on `limit` is a rule about a
+   * GraphQL argument and has no meaning below this layer.
+   */
+  @ResolveField(() => ProjectPage)
+  projectPage(
+    @Parent() profile: Profile,
+    @Args(new ZodArgsPipe(projectPageSchema)) args: ProjectPageArgs,
+  ): Promise<ProjectPage> {
+    return this.profiles.findProjectPage(profile.id, args.limit, args.offset);
   }
 }
