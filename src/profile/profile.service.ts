@@ -6,6 +6,7 @@ import { Experience } from './models/experience.model';
 import { Link } from './models/link.model';
 import { Profile } from './models/profile.model';
 import { Project } from './models/project.model';
+import { ProjectPage } from './models/project-page.model';
 import { Skill } from './models/skill.model';
 
 /**
@@ -87,5 +88,36 @@ export class ProfileService {
       where: { profileId },
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
     });
+  }
+
+  /**
+   * One page of the same rows `findProjects` returns.
+   *
+   * Both reads go inside a single `$transaction`, so `items` and `totalCount` observe one snapshot
+   * and cannot disagree about how many rows exist. The table is written only by migration today,
+   * which makes that theoretical here — but a total that contradicts its own page is the failure
+   * this shape exists to make impossible, not one to leave to the write pattern.
+   *
+   * Offset pagination is only reproducible over a total order, and this one already is: `sortOrder`
+   * carries no unique constraint, but `@@unique([profileId, name])` makes `name` unique within a
+   * profile, so `(sortOrder, name)` is distinct for every row of one profile and no third sort key
+   * is needed. Delete that constraint and these pages start drifting silently.
+   */
+  async findProjectPage(profileId: string, limit: number, offset: number): Promise<ProjectPage> {
+    const [items, totalCount] = await this.prisma.$transaction([
+      this.prisma.project.findMany({
+        where: { profileId },
+        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+        skip: offset,
+        take: limit,
+      }),
+      this.prisma.project.count({ where: { profileId } }),
+    ]);
+
+    return {
+      items,
+      totalCount,
+      pageInfo: { limit, offset, hasNextPage: offset + items.length < totalCount },
+    };
   }
 }
